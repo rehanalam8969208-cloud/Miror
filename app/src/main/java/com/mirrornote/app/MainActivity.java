@@ -262,7 +262,7 @@ public class MainActivity extends Activity {
         StringBuilder cleaned = new StringBuilder();
         for (int i = 0; i < input.length(); i++) {
             char c = input.charAt(i);
-            if (c == '/' || c == '\\\\' || c == ':' || c == '*' || c == '?' ||
+            if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' ||
                 c == '"' || c == '<' || c == '>' || c == '|') {
                 cleaned.append('_');
             } else {
