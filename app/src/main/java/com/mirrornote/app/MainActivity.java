@@ -1,5 +1,6 @@
 package com.mirrornote.app;
 
+import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ClipData;
@@ -7,7 +8,11 @@ import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.RadialGradient;
+import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
@@ -24,6 +29,7 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.animation.LinearInterpolator;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.EditText;
@@ -54,12 +60,14 @@ import java.util.Set;
 
 public class MainActivity extends Activity {
 
-    private static final int COLOR_BG_MAIN = 0xFF090B10;
-    private static final int COLOR_TEXT_PRIMARY = 0xFFFFFFFF;
-    private static final int COLOR_TEXT_SECONDARY = 0xFFA1A1AA;
-    private static final int COLOR_ACCENT = 0xFFAAB8FF;
-    private static final int COLOR_SUBTLE_LINE = 0x1AFFFFFF;
-    private static final int COLOR_GLASS_PILL = 0x12FFFFFF;
+    // White + Glassy Palette with Soft Blue Accent
+    private static final int COLOR_BG_WHITE = 0xFFF7F9FC;
+    private static final int COLOR_TEXT_PRIMARY = 0xFF0F172A;
+    private static final int COLOR_TEXT_SECONDARY = 0xFF64748B;
+    private static final int COLOR_ACCENT_BLUE = 0xFF2563EB;
+    private static final int COLOR_GLASS_WHITE = 0xCCFFFFFF;
+    private static final int COLOR_GLASS_BORDER = 0x330F172A;
+    private static final int COLOR_DIVIDER = 0x1A0F172A;
 
     private static final String PREFS_NAME = "mirror_note_prefs";
     private static final String KEY_PINNED = "pinned_files";
@@ -95,6 +103,78 @@ public class MainActivity extends Activity {
         }
     }
 
+    // Soft Floating Blue Smoke Background View
+    private static class BlueSmokeBackgroundView extends View {
+        private final Paint puffPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private ValueAnimator smokeAnimator;
+        private float phase = 0f;
+
+        BlueSmokeBackgroundView(Context context) {
+            super(context);
+            startSmoke();
+        }
+
+        private void startSmoke() {
+            smokeAnimator = ValueAnimator.ofFloat(0f, 1f);
+            smokeAnimator.setDuration(14000);
+            smokeAnimator.setRepeatCount(ValueAnimator.INFINITE);
+            smokeAnimator.setRepeatMode(ValueAnimator.REVERSE);
+            smokeAnimator.setInterpolator(new LinearInterpolator());
+            smokeAnimator.addUpdateListener(anim -> {
+                phase = (float) anim.getAnimatedValue();
+                invalidate();
+            });
+            smokeAnimator.start();
+        }
+
+        @Override
+        protected void onDetachedFromWindow() {
+            super.onDetachedFromWindow();
+            if (smokeAnimator != null) {
+                smokeAnimator.cancel();
+            }
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            float w = getWidth();
+            float h = getHeight();
+            if (w <= 0 || h <= 0) return;
+
+            canvas.drawColor(COLOR_BG_WHITE);
+
+            drawSmokeCloud(canvas,
+                    w * (0.20f + 0.14f * phase),
+                    h * (0.16f - 0.06f * phase),
+                    Math.max(w, h) * 0.56f,
+                    0x2E38BDF8, 0x1260A5FA);
+
+            drawSmokeCloud(canvas,
+                    w * (0.82f - 0.16f * phase),
+                    h * (0.46f + 0.09f * phase),
+                    Math.max(w, h) * 0.62f,
+                    0x2460A5FA, 0x0E93C5FD);
+
+            drawSmokeCloud(canvas,
+                    w * (0.36f + 0.18f * (1f - phase)),
+                    h * (0.82f - 0.10f * phase),
+                    Math.max(w, h) * 0.65f,
+                    0x293B82F6, 0x107DD3FC);
+        }
+
+        private void drawSmokeCloud(Canvas canvas, float cx, float cy, float radius,
+                                    int innerColor, int midColor) {
+            RadialGradient grad = new RadialGradient(
+                    cx, cy, radius,
+                    new int[]{innerColor, midColor, Color.TRANSPARENT},
+                    new float[]{0f, 0.52f, 1f},
+                    Shader.TileMode.CLAMP);
+            puffPaint.setShader(grad);
+            canvas.drawCircle(cx, cy, radius, puffPaint);
+        }
+    }
+
     private FrameLayout rootContainer;
     private View homeScreen;
     private View editorScreen;
@@ -104,12 +184,11 @@ public class MainActivity extends Activity {
     private EditText searchInput;
     private View clearSearchBtn;
     private LinearLayout notesListContainer;
-    private Button fabNewNote;
 
     private EditText editorTitleInput;
     private EditText editorBodyInput;
+    private TextView editorTimestampView;
     private TextView editorMetaView;
-    private TextView editorStatusView;
 
     private TextView settingsPermStatus;
     private TextView settingsTotalNotes;
@@ -124,6 +203,10 @@ public class MainActivity extends Activity {
 
     private String currentEditingFileName = null;
     private String lastSavedSignature = "";
+    private boolean isApplyingUndoRedo = false;
+    private final List<String> undoStack = new ArrayList<>();
+    private final List<String> redoStack = new ArrayList<>();
+
     private File lastDeletedFile = null;
     private byte[] lastDeletedBytes = null;
     private String lastDeletedName = null;
@@ -160,8 +243,11 @@ public class MainActivity extends Activity {
     }
 
     private void setupWindowTheme() {
-        getWindow().setStatusBarColor(COLOR_BG_MAIN);
-        getWindow().setNavigationBarColor(COLOR_BG_MAIN);
+        getWindow().setStatusBarColor(COLOR_BG_WHITE);
+        getWindow().setNavigationBarColor(COLOR_BG_WHITE);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             getWindow().getAttributes().layoutInDisplayCutoutMode =
                     android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
@@ -172,24 +258,29 @@ public class MainActivity extends Activity {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
-    private GradientDrawable pillDrawable(int fillColor, int strokeColor, int radiusDp) {
+    private GradientDrawable whiteGlassDrawable(int radiusDp, boolean accentBorder) {
         GradientDrawable d = new GradientDrawable();
-        d.setColor(fillColor);
+        d.setColor(COLOR_GLASS_WHITE);
         d.setCornerRadius(dp(radiusDp));
-        if (strokeColor != Color.TRANSPARENT) {
-            d.setStroke(dp(1), strokeColor);
-        }
+        d.setStroke(dp(1), accentBorder ? 0x662563EB : COLOR_GLASS_BORDER);
         return d;
     }
 
-    private void applyPressAnimation(View v, boolean isFab) {
+    private GradientDrawable bluePillDrawable(int radiusDp) {
+        GradientDrawable d = new GradientDrawable();
+        d.setColor(COLOR_ACCENT_BLUE);
+        d.setCornerRadius(dp(radiusDp));
+        return d;
+    }
+
+    private void applyPressFeedback(View v, boolean isFab) {
         v.setOnTouchListener((view, event) -> {
             switch (event.getAction()) {
                 case MotionEvent.ACTION_DOWN:
                     view.animate()
-                            .scaleX(isFab ? 0.92f : 0.98f)
-                            .scaleY(isFab ? 0.92f : 0.98f)
-                            .alpha(0.86f)
+                            .scaleX(isFab ? 0.92f : 0.97f)
+                            .scaleY(isFab ? 0.92f : 0.97f)
+                            .alpha(0.88f)
                             .setDuration(100)
                             .start();
                     break;
@@ -233,8 +324,12 @@ public class MainActivity extends Activity {
 
     private void buildRootLayout() {
         rootContainer = new FrameLayout(this);
-        rootContainer.setBackgroundColor(COLOR_BG_MAIN);
         rootContainer.setLayoutParams(new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // Animated blue smoke backdrop across all views
+        BlueSmokeBackgroundView smokeBg = new BlueSmokeBackgroundView(this);
+        rootContainer.addView(smokeBg, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         homeScreen = buildHomeScreen();
@@ -251,7 +346,7 @@ public class MainActivity extends Activity {
         setContentView(rootContainer);
     }
 
-    // ==================== CLEAN iPHONE-STYLE HOME ====================
+    // ==================== HOME SCREEN ====================
     private View buildHomeScreen() {
         FrameLayout wrapper = new FrameLayout(this);
         wrapper.setLayoutParams(new FrameLayout.LayoutParams(
@@ -260,22 +355,21 @@ public class MainActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.setClipToPadding(false);
-        scroll.setPadding(0, 0, 0, dp(96));
+        scroll.setPadding(0, 0, 0, dp(100));
 
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
         page.setPadding(dp(20), dp(28), dp(20), dp(24));
         scroll.addView(page);
 
-        // Top Bar: Minimalist Mirror 'M' + Notes + Settings
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
 
-        TextView logoBadge = makeText("M", 15, COLOR_BG_MAIN, true);
+        TextView logoBadge = makeText("M", 15, Color.WHITE, true);
         logoBadge.setGravity(Gravity.CENTER);
-        logoBadge.setBackground(pillDrawable(COLOR_ACCENT, Color.TRANSPARENT, 12));
-        LinearLayout.LayoutParams logoLp = new LinearLayout.LayoutParams(dp(32), dp(32));
+        logoBadge.setBackground(bluePillDrawable(12));
+        LinearLayout.LayoutParams logoLp = new LinearLayout.LayoutParams(dp(34), dp(34));
         logoLp.rightMargin = dp(10);
         topBar.addView(logoBadge, logoLp);
 
@@ -292,19 +386,21 @@ public class MainActivity extends Activity {
         settingsBtn.setAllCaps(false);
         settingsBtn.setTextSize(12.5f);
         settingsBtn.setTextColor(COLOR_TEXT_PRIMARY);
-        settingsBtn.setBackground(pillDrawable(COLOR_GLASS_PILL, COLOR_SUBTLE_LINE, 16));
+        settingsBtn.setBackground(whiteGlassDrawable(16, false));
+        settingsBtn.setElevation(dp(2));
         settingsBtn.setPadding(dp(14), dp(7), dp(14), dp(7));
         settingsBtn.setOnClickListener(v -> showSettingsScreen());
-        applyPressAnimation(settingsBtn, false);
+        applyPressFeedback(settingsBtn, false);
         topBar.addView(settingsBtn);
 
         page.addView(topBar);
 
-        // Clean Search Bar
+        // Glassy Search Bar
         LinearLayout searchRow = new LinearLayout(this);
         searchRow.setOrientation(LinearLayout.HORIZONTAL);
         searchRow.setGravity(Gravity.CENTER_VERTICAL);
-        searchRow.setBackground(pillDrawable(COLOR_GLASS_PILL, COLOR_SUBTLE_LINE, 16));
+        searchRow.setBackground(whiteGlassDrawable(18, false));
+        searchRow.setElevation(dp(2));
         searchRow.setPadding(dp(14), dp(2), dp(8), dp(2));
         LinearLayout.LayoutParams searchLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(44));
@@ -360,10 +456,8 @@ public class MainActivity extends Activity {
             chip.setAllCaps(false);
             chip.setTextSize(12);
             boolean active = (sortMode == mode);
-            chip.setTextColor(active ? COLOR_BG_MAIN : COLOR_TEXT_SECONDARY);
-            chip.setBackground(active
-                    ? pillDrawable(COLOR_ACCENT, Color.TRANSPARENT, 14)
-                    : pillDrawable(COLOR_GLASS_PILL, COLOR_SUBTLE_LINE, 14));
+            chip.setTextColor(active ? Color.WHITE : COLOR_TEXT_SECONDARY);
+            chip.setBackground(active ? bluePillDrawable(14) : whiteGlassDrawable(14, false));
             chip.setPadding(dp(14), dp(6), dp(14), dp(6));
             chip.setMinimumHeight(0);
             chip.setOnClickListener(v -> {
@@ -371,7 +465,7 @@ public class MainActivity extends Activity {
                 prefs.edit().putInt(KEY_SORT_MODE, sortMode).apply();
                 showHomeScreen();
             });
-            applyPressAnimation(chip, false);
+            applyPressFeedback(chip, false);
             LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, dp(32));
             cLp.rightMargin = dp(8);
@@ -382,7 +476,6 @@ public class MainActivity extends Activity {
         sortLp.bottomMargin = dp(12);
         page.addView(sortScroll, sortLp);
 
-        // Borderless Notes List Container
         notesListContainer = new LinearLayout(this);
         notesListContainer.setOrientation(LinearLayout.VERTICAL);
         page.addView(notesListContainer);
@@ -390,14 +483,14 @@ public class MainActivity extends Activity {
         wrapper.addView(scroll);
 
         // Floating New Note (+) Button
-        fabNewNote = new Button(this);
+        Button fabNewNote = new Button(this);
         fabNewNote.setText("+");
         fabNewNote.setTextSize(26);
-        fabNewNote.setTextColor(COLOR_BG_MAIN);
-        fabNewNote.setBackground(pillDrawable(COLOR_ACCENT, Color.TRANSPARENT, 28));
+        fabNewNote.setTextColor(Color.WHITE);
+        fabNewNote.setBackground(bluePillDrawable(28));
         fabNewNote.setElevation(dp(6));
         fabNewNote.setOnClickListener(v -> openEditorForNewNote());
-        applyPressAnimation(fabNewNote, true);
+        applyPressFeedback(fabNewNote, true);
 
         FrameLayout.LayoutParams fabLp = new FrameLayout.LayoutParams(dp(56), dp(56));
         fabLp.gravity = Gravity.BOTTOM | Gravity.END;
@@ -408,89 +501,125 @@ public class MainActivity extends Activity {
         return wrapper;
     }
 
-    // ==================== FULL-SCREEN BORDERLESS EDITOR ====================
+    // ==================== FULL-SCREEN EDITOR (SCREENSHOT-INSPIRED) ====================
     private View buildEditorScreen() {
+        FrameLayout wrapper = new FrameLayout(this);
+        wrapper.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
         LinearLayout screen = new LinearLayout(this);
         screen.setOrientation(LinearLayout.VERTICAL);
-        screen.setBackgroundColor(COLOR_BG_MAIN);
-        screen.setLayoutParams(new ViewGroup.LayoutParams(
+        screen.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        screen.setPadding(dp(18), dp(24), dp(18), dp(14));
+        screen.setPadding(dp(18), dp(22), dp(18), dp(86));
 
+        // Top Bar: Back + Undo/Redo + More + Done[span_4](start_span)[span_4](end_span)
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
 
         Button backBtn = new Button(this);
-        backBtn.setText("← Notes");
-        backBtn.setAllCaps(false);
-        backBtn.setTextSize(13.5f);
-        backBtn.setTextColor(COLOR_ACCENT);
-        backBtn.setBackgroundColor(Color.TRANSPARENT);
-        backBtn.setPadding(dp(4), dp(6), dp(10), dp(6));
+        backBtn.setText("←");
+        backBtn.setTextSize(18);
+        backBtn.setTextColor(COLOR_TEXT_PRIMARY);
+        backBtn.setBackground(whiteGlassDrawable(18, false));
+        backBtn.setElevation(dp(2));
         backBtn.setOnClickListener(v -> {
             performAutosave();
             hideKeyboard(editorBodyInput);
             showHomeScreen();
         });
-        applyPressAnimation(backBtn, false);
-        topBar.addView(backBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)));
+        applyPressFeedback(backBtn, false);
+        LinearLayout.LayoutParams backLp = new LinearLayout.LayoutParams(dp(40), dp(40));
+        backLp.rightMargin = dp(8);
+        topBar.addView(backBtn, backLp);
+
+        Button undoBtn = new Button(this);
+        undoBtn.setText("↶");
+        undoBtn.setTextSize(16);
+        undoBtn.setTextColor(COLOR_TEXT_PRIMARY);
+        undoBtn.setBackground(whiteGlassDrawable(18, false));
+        undoBtn.setElevation(dp(2));
+        undoBtn.setOnClickListener(v -> performUndo());
+        applyPressFeedback(undoBtn, false);
+        LinearLayout.LayoutParams undoLp = new LinearLayout.LayoutParams(dp(38), dp(38));
+        undoLp.rightMargin = dp(6);
+        topBar.addView(undoBtn, undoLp);
+
+        Button redoBtn = new Button(this);
+        redoBtn.setText("↷");
+        redoBtn.setTextSize(16);
+        redoBtn.setTextColor(COLOR_TEXT_PRIMARY);
+        redoBtn.setBackground(whiteGlassDrawable(18, false));
+        redoBtn.setElevation(dp(2));
+        redoBtn.setOnClickListener(v -> performRedo());
+        applyPressFeedback(redoBtn, false);
+        topBar.addView(redoBtn, new LinearLayout.LayoutParams(dp(38), dp(38)));
 
         View spacer = new View(this);
         topBar.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1f));
 
-        Button saveBtn = new Button(this);
-        saveBtn.setText("Save");
-        saveBtn.setAllCaps(false);
-        saveBtn.setTextSize(13);
-        saveBtn.setTextColor(COLOR_BG_MAIN);
-        saveBtn.setBackground(pillDrawable(COLOR_ACCENT, Color.TRANSPARENT, 16));
-        saveBtn.setPadding(dp(16), dp(6), dp(16), dp(6));
-        saveBtn.setOnClickListener(v -> {
-            if (saveCurrentNote(true)) {
-                Toast.makeText(this, "Saved", Toast.LENGTH_SHORT).show();
-            }
-        });
-        applyPressAnimation(saveBtn, false);
-        LinearLayout.LayoutParams saveLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(36));
-        saveLp.rightMargin = dp(6);
-        topBar.addView(saveBtn, saveLp);
-
         Button moreBtn = new Button(this);
-        moreBtn.setText("•••");
-        moreBtn.setAllCaps(false);
-        moreBtn.setTextSize(13.5f);
-        moreBtn.setTextColor(COLOR_ACCENT);
-        moreBtn.setBackgroundColor(Color.TRANSPARENT);
-        moreBtn.setPadding(dp(10), dp(6), dp(6), dp(6));
+        moreBtn.setText("⋮");
+        moreBtn.setTextSize(17);
+        moreBtn.setTextColor(COLOR_TEXT_PRIMARY);
+        moreBtn.setBackground(whiteGlassDrawable(18, false));
+        moreBtn.setElevation(dp(2));
         moreBtn.setOnClickListener(v -> showEditorMoreOptions());
-        applyPressAnimation(moreBtn, false);
-        topBar.addView(moreBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)));
+        applyPressFeedback(moreBtn, false);
+        LinearLayout.LayoutParams moreLp = new LinearLayout.LayoutParams(dp(38), dp(38));
+        moreLp.rightMargin = dp(8);
+        topBar.addView(moreBtn, moreLp);
+
+        Button doneBtn = new Button(this);
+        doneBtn.setText("Done");
+        doneBtn.setAllCaps(false);
+        doneBtn.setTextSize(13.5f);
+        doneBtn.setTextColor(Color.WHITE);
+        doneBtn.setBackground(bluePillDrawable(18));
+        doneBtn.setElevation(dp(3));
+        doneBtn.setPadding(dp(16), 0, dp(16), 0);
+        doneBtn.setOnClickListener(v -> {
+            saveCurrentNote(true);
+            hideKeyboard(editorBodyInput);
+            showHomeScreen();
+        });
+        applyPressFeedback(doneBtn, false);
+        topBar.addView(doneBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)));
 
         screen.addView(topBar);
 
+        // Date & Folder Meta Line (like 24/11/2026 | Default)[span_5](start_span)[span_5](end_span)[span_6](start_span)[span_6](end_span)
+        editorTimestampView = makeText(currentTimestampLabel(), 12, COLOR_TEXT_SECONDARY, false);
+        LinearLayout.LayoutParams tsLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        tsLp.topMargin = dp(12);
+        screen.addView(editorTimestampView, tsLp);
+
+        // Large Title Input[span_7](start_span)[span_7](end_span)
         editorTitleInput = new EditText(this);
         editorTitleInput.setHint("Title");
         editorTitleInput.setHintTextColor(COLOR_TEXT_SECONDARY);
         editorTitleInput.setTextColor(COLOR_TEXT_PRIMARY);
-        editorTitleInput.setTextSize(23);
+        editorTitleInput.setTextSize(24);
         editorTitleInput.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
         editorTitleInput.setSingleLine(true);
         editorTitleInput.setBackgroundColor(Color.TRANSPARENT);
         LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        titleLp.topMargin = dp(12);
+        titleLp.topMargin = dp(10);
         screen.addView(editorTitleInput, titleLp);
 
         editorMetaView = makeText("0 words • 0 chars", 11.5f, COLOR_TEXT_SECONDARY, false);
         LinearLayout.LayoutParams metaLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         metaLp.topMargin = dp(4);
-        metaLp.bottomMargin = dp(10);
+        metaLp.bottomMargin = dp(8);
         screen.addView(editorMetaView, metaLp);
 
+        // Full-Screen Writing Area
         editorBodyInput = new EditText(this);
-        editorBodyInput.setHint("Start typing...");
+        editorBodyInput.setHint("Start writing...");
         editorBodyInput.setHintTextColor(COLOR_TEXT_SECONDARY);
         editorBodyInput.setTextColor(COLOR_TEXT_PRIMARY);
         editorBodyInput.setTextSize(defaultFontSize);
@@ -502,7 +631,16 @@ public class MainActivity extends Activity {
                 | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
 
         TextWatcher watcher = new TextWatcher() {
-            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+                if (!isApplyingUndoRedo && editorBodyInput != null) {
+                    String currentText = editorBodyInput.getText().toString();
+                    if (undoStack.isEmpty() || !undoStack.get(undoStack.size() - 1).equals(currentText)) {
+                        undoStack.add(currentText);
+                        if (undoStack.size() > 40) undoStack.remove(0);
+                        redoStack.clear();
+                    }
+                }
+            }
             @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
                 updateEditorCounts();
                 scheduleAutosave();
@@ -512,25 +650,85 @@ public class MainActivity extends Activity {
         editorTitleInput.addTextChangedListener(watcher);
         editorBodyInput.addTextChangedListener(watcher);
 
-        LinearLayout.LayoutParams bodyLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
-        screen.addView(editorBodyInput, bodyLp);
+        screen.addView(editorBodyInput, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        editorStatusView = makeText("Internal storage/Mirror Note", 11, COLOR_TEXT_SECONDARY, false);
-        LinearLayout.LayoutParams stLp = new LinearLayout.LayoutParams(
+        wrapper.addView(screen);
+
+        // Floating White-Glass Bottom Action Bar[span_8](start_span)[span_8](end_span)[span_9](start_span)[span_9](end_span)
+        LinearLayout bottomBar = new LinearLayout(this);
+        bottomBar.setOrientation(LinearLayout.HORIZONTAL);
+        bottomBar.setGravity(Gravity.CENTER);
+        bottomBar.setBackground(whiteGlassDrawable(26, false));
+        bottomBar.setElevation(dp(8));
+        bottomBar.setPadding(dp(14), dp(8), dp(14), dp(8));
+
+        Button fontQuickBtn = new Button(this);
+        fontQuickBtn.setText("Aa");
+        fontQuickBtn.setAllCaps(false);
+        fontQuickBtn.setTextSize(14);
+        fontQuickBtn.setTextColor(COLOR_TEXT_PRIMARY);
+        fontQuickBtn.setBackgroundColor(Color.TRANSPARENT);
+        fontQuickBtn.setOnClickListener(v -> {
+            int nextSize = defaultFontSize >= 22 ? 15 : defaultFontSize + 2;
+            defaultFontSize = nextSize;
+            prefs.edit().putInt(KEY_FONT_SIZE, defaultFontSize).apply();
+            editorBodyInput.setTextSize(defaultFontSize);
+            Toast.makeText(this, "Font " + defaultFontSize + "sp", Toast.LENGTH_SHORT).show();
+        });
+        applyPressFeedback(fontQuickBtn, false);
+        bottomBar.addView(fontQuickBtn, new LinearLayout.LayoutParams(0, dp(40), 1f));
+
+        Button copyQuickBtn = new Button(this);
+        copyQuickBtn.setText("Copy");
+        copyQuickBtn.setAllCaps(false);
+        copyQuickBtn.setTextSize(13);
+        copyQuickBtn.setTextColor(COLOR_TEXT_PRIMARY);
+        copyQuickBtn.setBackgroundColor(Color.TRANSPARENT);
+        copyQuickBtn.setOnClickListener(v -> copyEditorContent());
+        applyPressFeedback(copyQuickBtn, false);
+        bottomBar.addView(copyQuickBtn, new LinearLayout.LayoutParams(0, dp(40), 1f));
+
+        Button shareQuickBtn = new Button(this);
+        shareQuickBtn.setText("Share");
+        shareQuickBtn.setAllCaps(false);
+        shareQuickBtn.setTextSize(13);
+        shareQuickBtn.setTextColor(COLOR_TEXT_PRIMARY);
+        shareQuickBtn.setBackgroundColor(Color.TRANSPARENT);
+        shareQuickBtn.setOnClickListener(v -> shareEditorContent());
+        applyPressFeedback(shareQuickBtn, false);
+        bottomBar.addView(shareQuickBtn, new LinearLayout.LayoutParams(0, dp(40), 1f));
+
+        Button saveQuickBtn = new Button(this);
+        saveQuickBtn.setText("Save");
+        saveQuickBtn.setAllCaps(false);
+        saveQuickBtn.setTextSize(13);
+        saveQuickBtn.setTextColor(COLOR_ACCENT_BLUE);
+        saveQuickBtn.setBackgroundColor(Color.TRANSPARENT);
+        saveQuickBtn.setOnClickListener(v -> {
+            if (saveCurrentNote(true)) {
+                Toast.makeText(this, "Saved to Mirror Note", Toast.LENGTH_SHORT).show();
+            }
+        });
+        applyPressFeedback(saveQuickBtn, false);
+        bottomBar.addView(saveQuickBtn, new LinearLayout.LayoutParams(0, dp(40), 1f));
+
+        FrameLayout.LayoutParams bbLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        stLp.topMargin = dp(6);
-        screen.addView(editorStatusView, stLp);
+        bbLp.gravity = Gravity.BOTTOM;
+        bbLp.leftMargin = dp(24);
+        bbLp.rightMargin = dp(24);
+        bbLp.bottomMargin = dp(16);
+        wrapper.addView(bottomBar, bbLp);
 
-        return screen;
+        return wrapper;
     }
 
-    // ==================== CLEAN SETTINGS SCREEN ====================
+    // ==================== SETTINGS SCREEN ====================
     private View buildSettingsScreen() {
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
-        scroll.setBackgroundColor(COLOR_BG_MAIN);
-        scroll.setLayoutParams(new ViewGroup.LayoutParams(
+        scroll.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         LinearLayout page = new LinearLayout(this);
@@ -546,10 +744,10 @@ public class MainActivity extends Activity {
         backBtn.setText("← Notes");
         backBtn.setAllCaps(false);
         backBtn.setTextSize(13.5f);
-        backBtn.setTextColor(COLOR_ACCENT);
+        backBtn.setTextColor(COLOR_ACCENT_BLUE);
         backBtn.setBackgroundColor(Color.TRANSPARENT);
         backBtn.setOnClickListener(v -> showHomeScreen());
-        applyPressAnimation(backBtn, false);
+        applyPressFeedback(backBtn, false);
         top.addView(backBtn);
 
         TextView heading = makeText("Settings", 22, COLOR_TEXT_PRIMARY, true);
@@ -559,31 +757,39 @@ public class MainActivity extends Activity {
         top.addView(heading, hLp);
         page.addView(top);
 
-        page.addView(sectionTitle("STORAGE"), topSpace(22));
-        page.addView(makeText("Internal storage/Mirror Note", 15, COLOR_TEXT_PRIMARY, true));
+        LinearLayout card1 = new LinearLayout(this);
+        card1.setOrientation(LinearLayout.VERTICAL);
+        card1.setBackground(whiteGlassDrawable(20, false));
+        card1.setPadding(dp(16), dp(14), dp(16), dp(14));
+        card1.addView(makeText("STORAGE", 11, COLOR_ACCENT_BLUE, true));
+        card1.addView(makeText("Internal storage/Mirror Note", 15, COLOR_TEXT_PRIMARY, true), topSpace(4));
         settingsPermStatus = makeText("File access: Checking...", 12.5f, COLOR_TEXT_SECONDARY, false);
         settingsTotalNotes = makeText("Total notes: 0", 12.5f, COLOR_TEXT_SECONDARY, false);
-        page.addView(settingsPermStatus, topSpace(4));
-        page.addView(settingsTotalNotes, topSpace(2));
+        card1.addView(settingsPermStatus, topSpace(4));
+        card1.addView(settingsTotalNotes, topSpace(2));
 
         Button permBtn = new Button(this);
         permBtn.setText("Allow / Manage File Access");
         permBtn.setAllCaps(false);
         permBtn.setTextSize(13);
-        permBtn.setTextColor(COLOR_BG_MAIN);
-        permBtn.setBackground(pillDrawable(COLOR_ACCENT, Color.TRANSPARENT, 16));
+        permBtn.setTextColor(Color.WHITE);
+        permBtn.setBackground(bluePillDrawable(15));
         permBtn.setOnClickListener(v -> requestManageAllFilesPermission());
-        applyPressAnimation(permBtn, false);
+        applyPressFeedback(permBtn, false);
         LinearLayout.LayoutParams pBtnLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, dp(40));
-        pBtnLp.topMargin = dp(10);
-        page.addView(permBtn, pBtnLp);
+        pBtnLp.topMargin = dp(12);
+        card1.addView(permBtn, pBtnLp);
+        page.addView(card1, topSpace(18));
 
-        page.addView(hairline(), topSpace(20));
-
-        page.addView(sectionTitle("EDITOR FONT"), topSpace(16));
-        settingsFontLabel = makeText("Size: " + defaultFontSize + "sp", 15, COLOR_TEXT_PRIMARY, true);
-        page.addView(settingsFontLabel, topSpace(4));
+        LinearLayout card2 = new LinearLayout(this);
+        card2.setOrientation(LinearLayout.VERTICAL);
+        card2.setBackground(whiteGlassDrawable(20, false));
+        card2.setPadding(dp(16), dp(14), dp(16), dp(14));
+        card2.addView(makeText("FONT & THEME", 11, COLOR_ACCENT_BLUE, true));
+        card2.addView(makeText("White Glass + Soft Blue Smoke", 14.5f, COLOR_TEXT_PRIMARY, true), topSpace(4));
+        settingsFontLabel = makeText("Editor Font: " + defaultFontSize + "sp", 13, COLOR_TEXT_SECONDARY, false);
+        card2.addView(settingsFontLabel, topSpace(4));
 
         LinearLayout fontRow = new LinearLayout(this);
         fontRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -591,42 +797,42 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         fRowLp.topMargin = dp(10);
 
-        Button smallerBtn = new Button(this);
-        smallerBtn.setText("A-");
-        smallerBtn.setAllCaps(false);
-        smallerBtn.setTextColor(COLOR_TEXT_PRIMARY);
-        smallerBtn.setBackground(pillDrawable(COLOR_GLASS_PILL, COLOR_SUBTLE_LINE, 14));
-        smallerBtn.setOnClickListener(v -> changeFontSize(-2));
-        applyPressAnimation(smallerBtn, false);
-        LinearLayout.LayoutParams smLp = new LinearLayout.LayoutParams(dp(56), dp(38));
+        Button smBtn = new Button(this);
+        smBtn.setText("A-");
+        smBtn.setAllCaps(false);
+        smBtn.setTextColor(COLOR_TEXT_PRIMARY);
+        smBtn.setBackground(whiteGlassDrawable(12, false));
+        smBtn.setOnClickListener(v -> changeFontSize(-2));
+        applyPressFeedback(smBtn, false);
+        LinearLayout.LayoutParams smLp = new LinearLayout.LayoutParams(dp(52), dp(36));
         smLp.rightMargin = dp(10);
-        fontRow.addView(smallerBtn, smLp);
+        fontRow.addView(smBtn, smLp);
 
-        Button largerBtn = new Button(this);
-        largerBtn.setText("A+");
-        largerBtn.setAllCaps(false);
-        largerBtn.setTextColor(COLOR_TEXT_PRIMARY);
-        largerBtn.setBackground(pillDrawable(COLOR_GLASS_PILL, COLOR_SUBTLE_LINE, 14));
-        largerBtn.setOnClickListener(v -> changeFontSize(2));
-        applyPressAnimation(largerBtn, false);
-        fontRow.addView(largerBtn, new LinearLayout.LayoutParams(dp(56), dp(38)));
-        page.addView(fontRow, fRowLp);
+        Button lgBtn = new Button(this);
+        lgBtn.setText("A+");
+        lgBtn.setAllCaps(false);
+        lgBtn.setTextColor(COLOR_TEXT_PRIMARY);
+        lgBtn.setBackground(whiteGlassDrawable(12, false));
+        lgBtn.setOnClickListener(v -> changeFontSize(2));
+        applyPressFeedback(lgBtn, false);
+        fontRow.addView(lgBtn, new LinearLayout.LayoutParams(dp(52), dp(36)));
+        card2.addView(fontRow, fRowLp);
+        page.addView(card2, topSpace(14));
 
-        page.addView(hairline(), topSpace(20));
-
-        page.addView(sectionTitle("ABOUT & PRIVACY"), topSpace(16));
-        page.addView(makeText("Mirror Note • v1.0", 14.5f, COLOR_TEXT_PRIMARY, true), topSpace(4));
+        LinearLayout card3 = new LinearLayout(this);
+        card3.setOrientation(LinearLayout.VERTICAL);
+        card3.setBackground(whiteGlassDrawable(20, false));
+        card3.setPadding(dp(16), dp(14), dp(16), dp(14));
+        card3.addView(makeText("ABOUT & PRIVACY", 11, COLOR_ACCENT_BLUE, true));
+        card3.addView(makeText("Mirror Note • v1.0", 14, COLOR_TEXT_PRIMARY, true), topSpace(4));
         TextView priv = makeText(
-                "Notes are saved locally as UTF-8 .txt files inside Internal storage/Mirror Note. Nothing is uploaded to any server.",
+                "Saved locally as UTF-8 .txt files inside Internal storage/Mirror Note. No cloud sync.",
                 12.5f, COLOR_TEXT_SECONDARY, false);
         priv.setLineSpacing(dp(3), 1.15f);
-        page.addView(priv, topSpace(4));
+        card3.addView(priv, topSpace(4));
+        page.addView(card3, topSpace(14));
 
         return scroll;
-    }
-
-    private TextView sectionTitle(String text) {
-        return makeText(text, 11, COLOR_ACCENT, true);
     }
 
     private LinearLayout.LayoutParams topSpace(int topDp) {
@@ -638,9 +844,14 @@ public class MainActivity extends Activity {
 
     private View hairline() {
         View v = new View(this);
-        v.setBackgroundColor(COLOR_SUBTLE_LINE);
+        v.setBackgroundColor(COLOR_DIVIDER);
         v.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
         return v;
+    }
+
+    private String currentTimestampLabel() {
+        String dt = new SimpleDateFormat("dd/MM/yyyy, HH:mm", Locale.getDefault()).format(new Date());
+        return dt + "  |  Default";
     }
 
     private void changeFontSize(int delta) {
@@ -660,7 +871,7 @@ public class MainActivity extends Activity {
             settingsTotalNotes.setText("Total notes: " + allNotes.size());
         }
         if (settingsFontLabel != null) {
-            settingsFontLabel.setText("Size: " + defaultFontSize + "sp");
+            settingsFontLabel.setText("Editor Font: " + defaultFontSize + "sp");
         }
     }
 
@@ -685,11 +896,13 @@ public class MainActivity extends Activity {
             return;
         }
         currentEditingFileName = null;
+        undoStack.clear();
+        redoStack.clear();
         editorTitleInput.setText("");
         editorBodyInput.setText("");
         editorBodyInput.setTextSize(defaultFontSize);
+        editorTimestampView.setText(currentTimestampLabel());
         lastSavedSignature = "";
-        editorStatusView.setText("Internal storage/Mirror Note");
         updateEditorCounts();
 
         homeScreen.setVisibility(View.GONE);
@@ -702,16 +915,42 @@ public class MainActivity extends Activity {
 
     private void openEditorForExistingNote(NoteEntry entry) {
         currentEditingFileName = entry.fileName;
+        undoStack.clear();
+        redoStack.clear();
         editorTitleInput.setText(entry.title);
         editorBodyInput.setText(entry.body);
         editorBodyInput.setTextSize(defaultFontSize);
+        String dt = new SimpleDateFormat("dd/MM/yyyy, HH:mm", Locale.getDefault())
+                .format(new Date(entry.lastModified));
+        editorTimestampView.setText(dt + "  |  Default");
         lastSavedSignature = entry.title + "\n" + entry.body;
-        editorStatusView.setText("Mirror Note/" + entry.fileName);
         updateEditorCounts();
 
         homeScreen.setVisibility(View.GONE);
         settingsScreen.setVisibility(View.GONE);
         animateScreenIn(editorScreen);
+    }
+
+    private void performUndo() {
+        if (undoStack.isEmpty() || editorBodyInput == null) return;
+        String prev = undoStack.remove(undoStack.size() - 1);
+        redoStack.add(editorBodyInput.getText().toString());
+        isApplyingUndoRedo = true;
+        editorBodyInput.setText(prev);
+        editorBodyInput.setSelection(prev.length());
+        isApplyingUndoRedo = false;
+        updateEditorCounts();
+    }
+
+    private void performRedo() {
+        if (redoStack.isEmpty() || editorBodyInput == null) return;
+        String next = redoStack.remove(redoStack.size() - 1);
+        undoStack.add(editorBodyInput.getText().toString());
+        isApplyingUndoRedo = true;
+        editorBodyInput.setText(next);
+        editorBodyInput.setSelection(next.length());
+        isApplyingUndoRedo = false;
+        updateEditorCounts();
     }
 
     private void showKeyboard(View target) {
@@ -931,8 +1170,9 @@ public class MainActivity extends Activity {
 
         currentEditingFileName = targetFileName;
         lastSavedSignature = rawTitle + "\n" + body;
-        String timeStr = new SimpleDateFormat("hh:mm a", Locale.getDefault()).format(new Date());
-        editorStatusView.setText("Saved • " + timeStr);
+        if (editorTimestampView != null) {
+            editorTimestampView.setText(currentTimestampLabel());
+        }
         return true;
     }
 
@@ -950,6 +1190,26 @@ public class MainActivity extends Activity {
         editorMetaView.setText(words + (words == 1 ? " word" : " words") + " • " + chars + " chars");
     }
 
+    private void copyEditorContent() {
+        String title = editorTitleInput.getText().toString().trim();
+        String body = editorBodyInput.getText().toString();
+        ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (cm != null) {
+            cm.setPrimaryClip(ClipData.newPlainText(title.isEmpty() ? "Note" : title, body));
+            Toast.makeText(this, "Copied", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void shareEditorContent() {
+        String title = editorTitleInput.getText().toString().trim();
+        String body = editorBodyInput.getText().toString();
+        Intent share = new Intent(Intent.ACTION_SEND);
+        share.setType("text/plain");
+        share.putExtra(Intent.EXTRA_SUBJECT, title.isEmpty() ? "Note" : title);
+        share.putExtra(Intent.EXTRA_TEXT, (title.isEmpty() ? "" : title + "\n\n") + body);
+        startActivity(Intent.createChooser(share, "Share note"));
+    }
+
     private void showEditorMoreOptions() {
         String[] options = {
                 "Pin / Unpin Note",
@@ -961,8 +1221,6 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle("Note Options")
                 .setItems(options, (dialog, which) -> {
-                    String title = editorTitleInput.getText().toString().trim();
-                    String body = editorBodyInput.getText().toString();
                     if (which == 0) {
                         if (saveCurrentNote(false) && currentEditingFileName != null) {
                             toggleSetPref(KEY_PINNED, currentEditingFileName);
@@ -974,17 +1232,9 @@ public class MainActivity extends Activity {
                             Toast.makeText(this, "Favourite updated", Toast.LENGTH_SHORT).show();
                         }
                     } else if (which == 2) {
-                        ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-                        if (cm != null) {
-                            cm.setPrimaryClip(ClipData.newPlainText(title.isEmpty() ? "Note" : title, body));
-                            Toast.makeText(this, "Copied", Toast.LENGTH_SHORT).show();
-                        }
+                        copyEditorContent();
                     } else if (which == 3) {
-                        Intent share = new Intent(Intent.ACTION_SEND);
-                        share.setType("text/plain");
-                        share.putExtra(Intent.EXTRA_SUBJECT, title.isEmpty() ? "Note" : title);
-                        share.putExtra(Intent.EXTRA_TEXT, (title.isEmpty() ? "" : title + "\n\n") + body);
-                        startActivity(Intent.createChooser(share, "Share note"));
+                        shareEditorContent();
                     } else if (which == 4) {
                         if (currentEditingFileName != null) {
                             confirmAndDeleteFile(new File(notesFolder, currentEditingFileName), true);
@@ -1051,7 +1301,7 @@ public class MainActivity extends Activity {
                 .show();
     }
 
-    // ==================== BORDERLESS iPHONE-STYLE LIST ====================
+    // ==================== CLEAN NOTES LIST ====================
     private void renderNotesList() {
         if (notesListContainer == null) return;
         notesListContainer.removeAllViews();
@@ -1071,7 +1321,7 @@ public class MainActivity extends Activity {
 
         if (filtered.isEmpty()) {
             String msg = !hasStorageAccess()
-                    ? "Tap Settings or + to allow file access."
+                    ? "Tap + or Settings to allow file access."
                     : (query.isEmpty() ? "No notes yet. Tap + to write." : "No matching notes.");
             TextView empty = makeText(msg, 14, COLOR_TEXT_SECONDARY, false);
             empty.setPadding(dp(2), dp(36), dp(2), dp(24));
@@ -1088,7 +1338,7 @@ public class MainActivity extends Activity {
 
             if (item.pinned && !hasPinnedHeader) {
                 hasPinnedHeader = true;
-                TextView pHdr = makeText("PINNED", 11, COLOR_ACCENT, true);
+                TextView pHdr = makeText("PINNED", 11, COLOR_ACCENT_BLUE, true);
                 LinearLayout.LayoutParams hLp = new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
                 hLp.topMargin = dp(4);
@@ -1110,7 +1360,7 @@ public class MainActivity extends Activity {
             row.setBackgroundColor(Color.TRANSPARENT);
 
             String prefix = (item.pinned ? "📌 " : "") + (item.favourite ? "★ " : "");
-            TextView tView = makeText(prefix + item.title, 16, COLOR_TEXT_PRIMARY, true);
+            TextView tView = makeText(prefix + item.title, 16.5f, COLOR_TEXT_PRIMARY, true);
             tView.setSingleLine(true);
             row.addView(tView);
 
@@ -1138,7 +1388,7 @@ public class MainActivity extends Activity {
                 showItemLongPressMenu(item);
                 return true;
             });
-            applyPressAnimation(row, false);
+            applyPressFeedback(row, false);
 
             notesListContainer.addView(row);
 
