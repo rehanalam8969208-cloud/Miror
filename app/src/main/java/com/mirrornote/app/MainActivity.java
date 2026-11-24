@@ -134,9 +134,9 @@ public class MainActivity extends Activity {
     private int sortMode = SORT_EDITED;
     private int defaultFontSize = 17;
     private boolean darkGlassMode = false; // false = White Glass, true = Black Glass
-    private int glassAlpha = 195;          // 0..255
-    private int borderAlpha = 45;          // 0..255
-    private int wallpaperDim = 22;         // 0..85
+    private int glassAlpha = 140;          // 0..255 (0 = fully transparent)
+    private int borderAlpha = 60;          // 0..255
+    private int wallpaperDim = 20;         // 0..85
     private int cornerRadiusDp = 22;       // 8..34
 
     private String currentEditingFileName = null;
@@ -158,9 +158,9 @@ public class MainActivity extends Activity {
         sortMode = prefs.getInt(KEY_SORT_MODE, SORT_EDITED);
         defaultFontSize = prefs.getInt(KEY_FONT_SIZE, 17);
         darkGlassMode = prefs.getBoolean(KEY_DARK_GLASS, false);
-        glassAlpha = prefs.getInt(KEY_GLASS_ALPHA, 195);
-        borderAlpha = prefs.getInt(KEY_BORDER_ALPHA, 45);
-        wallpaperDim = prefs.getInt(KEY_WP_DIM, 22);
+        glassAlpha = prefs.getInt(KEY_GLASS_ALPHA, 140);
+        borderAlpha = prefs.getInt(KEY_BORDER_ALPHA, 60);
+        wallpaperDim = prefs.getInt(KEY_WP_DIM, 20);
         cornerRadiusDp = prefs.getInt(KEY_CORNER_RADIUS, 22);
 
         setupWindowAndTheme();
@@ -206,10 +206,6 @@ public class MainActivity extends Activity {
         return darkGlassMode ? 0xFFA1A1AA : 0xFF64748B;
     }
 
-    private int accentColor() {
-        return darkGlassMode ? 0xFFAAB8FF : 0xFF2563EB;
-    }
-
     private void setupWindowAndTheme() {
         int bg = bgColor();
         getWindow().setStatusBarColor(bg);
@@ -234,23 +230,22 @@ public class MainActivity extends Activity {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
-    private GradientDrawable glassDrawable(int radiusDp, boolean accentBorder) {
+    private GradientDrawable uniformGlassDrawable(int radiusDp, boolean selected) {
         GradientDrawable d = new GradientDrawable();
         int alpha = Math.max(0, Math.min(255, glassAlpha));
+        if (selected && alpha < 75) {
+            alpha = 75;
+        }
         int baseRgb = darkGlassMode ? 0x00141822 : 0x00FFFFFF;
         d.setColor((alpha << 24) | baseRgb);
         d.setCornerRadius(dp(radiusDp));
-        int bAlpha = Math.max(0, Math.min(255, borderAlpha));
-        int bRgb = darkGlassMode ? 0x00FFFFFF : 0x000F172A;
-        int stroke = accentBorder ? accentColor() : ((bAlpha << 24) | bRgb);
-        d.setStroke(dp(1), stroke);
-        return d;
-    }
 
-    private GradientDrawable accentPillDrawable(int radiusDp) {
-        GradientDrawable d = new GradientDrawable();
-        d.setColor(accentColor());
-        d.setCornerRadius(dp(radiusDp));
+        int bAlpha = Math.max(0, Math.min(255, borderAlpha));
+        if (selected && bAlpha < 130) {
+            bAlpha = 130;
+        }
+        int bRgb = darkGlassMode ? 0x00FFFFFF : 0x000F172A;
+        d.setStroke(dp(selected ? 1.5f : 1f), (bAlpha << 24) | bRgb);
         return d;
     }
 
@@ -259,8 +254,8 @@ public class MainActivity extends Activity {
             switch (event.getAction()) {
                 case MotionEvent.ACTION_DOWN:
                     view.animate()
-                            .scaleX(isFab ? 0.90f : 0.965f)
-                            .scaleY(isFab ? 0.90f : 0.965f)
+                            .scaleX(isFab ? 0.92f : 0.965f)
+                            .scaleY(isFab ? 0.92f : 0.965f)
                             .translationY(dp(1.5f))
                             .alpha(0.88f)
                             .setDuration(120)
@@ -275,7 +270,7 @@ public class MainActivity extends Activity {
                             .translationY(0f)
                             .alpha(1f)
                             .setDuration(250)
-                            .setInterpolator(new android.view.animation.OvershootInterpolator(1.22f))
+                            .setInterpolator(new android.view.animation.OvershootInterpolator(1.2f))
                             .start();
                     break;
             }
@@ -339,7 +334,6 @@ public class MainActivity extends Activity {
         setContentView(rootContainer);
     }
 
-    // Ensures bottom bar lifts cleanly above open keyboard even on OEM/gesture devices
     private void attachKeyboardLiftListener() {
         if (rootContainer == null) return;
         rootContainer.getViewTreeObserver().addOnGlobalLayoutListener(() -> {
@@ -437,17 +431,23 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void rebuildScreensWithCurrentTheme() {
+    private void rebuildKeepingScreen(int targetScreen) {
         setupWindowAndTheme();
-        applySavedWallpaperAndDim();
         buildRootLayout();
         applySavedWallpaperAndDim();
         attachKeyboardLiftListener();
-        showSettingsScreen();
+        if (targetScreen == 1) {
+            homeScreen.setVisibility(View.GONE);
+            settingsScreen.setVisibility(View.GONE);
+            refreshSettingsLabels();
+            animateScreenIn(settingsScreen);
+        } else {
+            showHomeScreen();
+        }
         checkPermissionAndLoad(false);
     }
 
-    // ==================== CLEAN HOME SCREEN ====================
+    // ==================== HOME SCREEN ====================
     private View buildHomeScreen() {
         FrameLayout wrapper = new FrameLayout(this);
         wrapper.setLayoutParams(new FrameLayout.LayoutParams(
@@ -463,25 +463,36 @@ public class MainActivity extends Activity {
         page.setPadding(dp(20), dp(28), dp(20), dp(24));
         scroll.addView(page);
 
-        // Clean Header: Logo + App Name + Notes count (no corner wallpaper/settings clutter)
+        // Top Bar: Flower Icon + Mirror Note + Settings in Top-Right Corner
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
 
-        TextView logoBadge = makeText("M", 15, darkGlassMode ? 0xFF07090D : Color.WHITE, true);
-        logoBadge.setGravity(Gravity.CENTER);
-        logoBadge.setBackground(accentPillDrawable(12));
+        TextView flowerBadge = makeText("✿", 18, primaryTextColor(), true);
+        flowerBadge.setGravity(Gravity.CENTER);
+        flowerBadge.setBackground(uniformGlassDrawable(12, false));
         LinearLayout.LayoutParams logoLp = new LinearLayout.LayoutParams(dp(34), dp(34));
         logoLp.rightMargin = dp(10);
-        topBar.addView(logoBadge, logoLp);
+        topBar.addView(flowerBadge, logoLp);
 
         LinearLayout titleCol = new LinearLayout(this);
         titleCol.setOrientation(LinearLayout.VERTICAL);
-        homeTitleView = makeText("Mirror Note", 26, primaryTextColor(), true);
+        homeTitleView = makeText("Mirror Note", 25, primaryTextColor(), true);
         countSummaryView = makeText("0 notes", 12, secondaryTextColor(), false);
         titleCol.addView(homeTitleView);
         titleCol.addView(countSummaryView);
         topBar.addView(titleCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        Button settingsTopBtn = new Button(this);
+        settingsTopBtn.setText("Settings");
+        settingsTopBtn.setAllCaps(false);
+        settingsTopBtn.setTextSize(12.5f);
+        settingsTopBtn.setTextColor(primaryTextColor());
+        settingsTopBtn.setBackground(uniformGlassDrawable(16, false));
+        settingsTopBtn.setPadding(dp(14), dp(7), dp(14), dp(7));
+        settingsTopBtn.setOnClickListener(v -> showSettingsScreen());
+        applyAndroid17Press(settingsTopBtn, false);
+        topBar.addView(settingsTopBtn);
 
         page.addView(topBar);
 
@@ -489,7 +500,7 @@ public class MainActivity extends Activity {
         LinearLayout searchRow = new LinearLayout(this);
         searchRow.setOrientation(LinearLayout.HORIZONTAL);
         searchRow.setGravity(Gravity.CENTER_VERTICAL);
-        searchRow.setBackground(glassDrawable(18, false));
+        searchRow.setBackground(uniformGlassDrawable(18, false));
         searchRow.setPadding(dp(14), dp(2), dp(8), dp(2));
         LinearLayout.LayoutParams searchLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(44));
@@ -535,12 +546,11 @@ public class MainActivity extends Activity {
 
         wrapper.addView(scroll);
 
-        // Home Bottom Toggle Bar: Recent | Created | A-Z | + / Settings
+        // Bottom Toggle Bar: 4 Equal Buttons (Recent | Created | A–Z | +) with Uniform Styling
         LinearLayout homeDock = new LinearLayout(this);
         homeDock.setOrientation(LinearLayout.HORIZONTAL);
         homeDock.setGravity(Gravity.CENTER_VERTICAL);
-        homeDock.setBackground(glassDrawable(24, false));
-        homeDock.setElevation(dp(8));
+        homeDock.setBackground(uniformGlassDrawable(24, false));
         homeDock.setPadding(dp(8), dp(6), dp(8), dp(6));
 
         String[] sortLabels = {"Recent", "Created", "A–Z"};
@@ -552,8 +562,10 @@ public class MainActivity extends Activity {
             tabBtn.setAllCaps(false);
             tabBtn.setTextSize(12.5f);
             boolean active = (sortMode == mode);
-            tabBtn.setTextColor(active ? (darkGlassMode ? 0xFF07090D : Color.WHITE) : secondaryTextColor());
-            tabBtn.setBackground(active ? accentPillDrawable(16) : new GradientDrawable());
+            tabBtn.setTextColor(active ? primaryTextColor() : secondaryTextColor());
+            tabBtn.setTypeface(Typeface.create(active ? "sans-serif-medium" : "sans-serif",
+                    active ? Typeface.BOLD : Typeface.NORMAL));
+            tabBtn.setBackground(uniformGlassDrawable(16, active));
             tabBtn.setMinimumHeight(0);
             tabBtn.setOnClickListener(v -> {
                 sortMode = mode;
@@ -562,39 +574,26 @@ public class MainActivity extends Activity {
             });
             applyAndroid17Press(tabBtn, false);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(38), 1f);
-            lp.rightMargin = dp(4);
+            lp.rightMargin = dp(6);
             homeDock.addView(tabBtn, lp);
         }
 
         Button newBtn = new Button(this);
         newBtn.setText("+");
+        newBtn.setAllCaps(false);
         newBtn.setTextSize(18);
-        newBtn.setTextColor(darkGlassMode ? 0xFF07090D : Color.WHITE);
-        newBtn.setBackground(accentPillDrawable(16));
+        newBtn.setTextColor(primaryTextColor());
+        newBtn.setBackground(uniformGlassDrawable(16, false));
+        newBtn.setMinimumHeight(0);
         newBtn.setOnClickListener(v -> openEditorForNewNote());
-        newBtn.setOnLongClickListener(v -> {
-            showSettingsScreen();
-            return true;
-        });
         applyAndroid17Press(newBtn, true);
-        LinearLayout.LayoutParams nLp = new LinearLayout.LayoutParams(dp(44), dp(38));
-        nLp.rightMargin = dp(4);
-        homeDock.addView(newBtn, nLp);
-
-        Button gearBtn = new Button(this);
-        gearBtn.setText("⚙");
-        gearBtn.setTextSize(15);
-        gearBtn.setTextColor(primaryTextColor());
-        gearBtn.setBackground(glassDrawable(16, false));
-        gearBtn.setOnClickListener(v -> showSettingsScreen());
-        applyAndroid17Press(gearBtn, false);
-        homeDock.addView(gearBtn, new LinearLayout.LayoutParams(dp(40), dp(38)));
+        homeDock.addView(newBtn, new LinearLayout.LayoutParams(0, dp(38), 1f));
 
         FrameLayout.LayoutParams hdLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         hdLp.gravity = Gravity.BOTTOM;
-        hdLp.leftMargin = dp(16);
-        hdLp.rightMargin = dp(16);
+        hdLp.leftMargin = dp(18);
+        hdLp.rightMargin = dp(18);
         hdLp.bottomMargin = dp(16);
         wrapper.addView(homeDock, hdLp);
 
@@ -621,7 +620,7 @@ public class MainActivity extends Activity {
         backBtn.setText("←");
         backBtn.setTextSize(18);
         backBtn.setTextColor(primaryTextColor());
-        backBtn.setBackground(glassDrawable(18, false));
+        backBtn.setBackground(uniformGlassDrawable(18, false));
         backBtn.setOnClickListener(v -> {
             performAutosave();
             hideKeyboard(editorBodyInput);
@@ -637,7 +636,7 @@ public class MainActivity extends Activity {
         moreBtn.setText("⋮");
         moreBtn.setTextSize(17);
         moreBtn.setTextColor(primaryTextColor());
-        moreBtn.setBackground(glassDrawable(18, false));
+        moreBtn.setBackground(uniformGlassDrawable(18, false));
         moreBtn.setOnClickListener(v -> showEditorMoreOptions());
         applyAndroid17Press(moreBtn, false);
         LinearLayout.LayoutParams moreLp = new LinearLayout.LayoutParams(dp(38), dp(38));
@@ -648,8 +647,8 @@ public class MainActivity extends Activity {
         doneBtn.setText("Done");
         doneBtn.setAllCaps(false);
         doneBtn.setTextSize(13.5f);
-        doneBtn.setTextColor(darkGlassMode ? 0xFF07090D : Color.WHITE);
-        doneBtn.setBackground(accentPillDrawable(18));
+        doneBtn.setTextColor(primaryTextColor());
+        doneBtn.setBackground(uniformGlassDrawable(18, true));
         doneBtn.setPadding(dp(16), 0, dp(16), 0);
         doneBtn.setOnClickListener(v -> {
             saveCurrentNote(true);
@@ -728,8 +727,7 @@ public class MainActivity extends Activity {
         LinearLayout bottomBar = new LinearLayout(this);
         bottomBar.setOrientation(LinearLayout.HORIZONTAL);
         bottomBar.setGravity(Gravity.CENTER_VERTICAL);
-        bottomBar.setBackground(glassDrawable(24, false));
-        bottomBar.setElevation(dp(8));
+        bottomBar.setBackground(uniformGlassDrawable(24, false));
         bottomBar.setPadding(dp(8), dp(6), dp(8), dp(6));
 
         Button undoBtn = new Button(this);
@@ -737,7 +735,7 @@ public class MainActivity extends Activity {
         undoBtn.setAllCaps(false);
         undoBtn.setTextSize(12.5f);
         undoBtn.setTextColor(primaryTextColor());
-        undoBtn.setBackground(glassDrawable(14, false));
+        undoBtn.setBackground(uniformGlassDrawable(14, false));
         undoBtn.setOnClickListener(v -> performUndo());
         applyAndroid17Press(undoBtn, false);
         LinearLayout.LayoutParams uLp = new LinearLayout.LayoutParams(0, dp(38), 1f);
@@ -749,7 +747,7 @@ public class MainActivity extends Activity {
         redoBtn.setAllCaps(false);
         redoBtn.setTextSize(12.5f);
         redoBtn.setTextColor(primaryTextColor());
-        redoBtn.setBackground(glassDrawable(14, false));
+        redoBtn.setBackground(uniformGlassDrawable(14, false));
         redoBtn.setOnClickListener(v -> performRedo());
         applyAndroid17Press(redoBtn, false);
         LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(0, dp(38), 1f);
@@ -761,7 +759,7 @@ public class MainActivity extends Activity {
         selectAllBtn.setAllCaps(false);
         selectAllBtn.setTextSize(12.5f);
         selectAllBtn.setTextColor(primaryTextColor());
-        selectAllBtn.setBackground(glassDrawable(14, false));
+        selectAllBtn.setBackground(uniformGlassDrawable(14, false));
         selectAllBtn.setOnClickListener(v -> selectAllInEditor());
         applyAndroid17Press(selectAllBtn, false);
         LinearLayout.LayoutParams saLp = new LinearLayout.LayoutParams(0, dp(38), 1.15f);
@@ -772,8 +770,8 @@ public class MainActivity extends Activity {
         shareBtn.setText("Share");
         shareBtn.setAllCaps(false);
         shareBtn.setTextSize(12.5f);
-        shareBtn.setTextColor(darkGlassMode ? 0xFF07090D : Color.WHITE);
-        shareBtn.setBackground(accentPillDrawable(14));
+        shareBtn.setTextColor(primaryTextColor());
+        shareBtn.setBackground(uniformGlassDrawable(14, true));
         shareBtn.setOnClickListener(v -> shareEditorContent());
         applyAndroid17Press(shareBtn, false);
         bottomBar.addView(shareBtn, new LinearLayout.LayoutParams(0, dp(38), 1f));
@@ -820,7 +818,7 @@ public class MainActivity extends Activity {
         backBtn.setText("←");
         backBtn.setTextSize(18);
         backBtn.setTextColor(primaryTextColor());
-        backBtn.setBackground(glassDrawable(18, false));
+        backBtn.setBackground(uniformGlassDrawable(18, false));
         backBtn.setOnClickListener(v -> showHomeScreen());
         applyAndroid17Press(backBtn, false);
         top.addView(backBtn, new LinearLayout.LayoutParams(dp(40), dp(40)));
@@ -835,9 +833,9 @@ public class MainActivity extends Activity {
         // Theme & Wallpaper Card
         LinearLayout wpCard = new LinearLayout(this);
         wpCard.setOrientation(LinearLayout.VERTICAL);
-        wpCard.setBackground(glassDrawable(cornerRadiusDp, false));
+        wpCard.setBackground(uniformGlassDrawable(cornerRadiusDp, false));
         wpCard.setPadding(dp(16), dp(14), dp(16), dp(14));
-        wpCard.addView(makeText("THEME & WALLPAPER", 11, accentColor(), true));
+        wpCard.addView(makeText("THEME & WALLPAPER", 11, secondaryTextColor(), true));
         settingsThemeModeLabel = makeText(
                 "Mode: " + (darkGlassMode ? "Dark Black Glass" : "White Glass"),
                 14, primaryTextColor(), true);
@@ -854,12 +852,12 @@ public class MainActivity extends Activity {
         Button whiteBtn = new Button(this);
         whiteBtn.setText("White Glass");
         whiteBtn.setAllCaps(false);
-        whiteBtn.setTextColor(!darkGlassMode ? Color.WHITE : primaryTextColor());
-        whiteBtn.setBackground(!darkGlassMode ? accentPillDrawable(14) : glassDrawable(14, false));
+        whiteBtn.setTextColor(primaryTextColor());
+        whiteBtn.setBackground(uniformGlassDrawable(14, !darkGlassMode));
         whiteBtn.setOnClickListener(v -> {
             darkGlassMode = false;
             prefs.edit().putBoolean(KEY_DARK_GLASS, false).apply();
-            rebuildScreensWithCurrentTheme();
+            rebuildKeepingScreen(1);
         });
         applyAndroid17Press(whiteBtn, false);
         LinearLayout.LayoutParams wLp = new LinearLayout.LayoutParams(0, dp(38), 1f);
@@ -869,12 +867,12 @@ public class MainActivity extends Activity {
         Button blackBtn = new Button(this);
         blackBtn.setText("Black Glass");
         blackBtn.setAllCaps(false);
-        blackBtn.setTextColor(darkGlassMode ? 0xFF07090D : primaryTextColor());
-        blackBtn.setBackground(darkGlassMode ? accentPillDrawable(14) : glassDrawable(14, false));
+        blackBtn.setTextColor(primaryTextColor());
+        blackBtn.setBackground(uniformGlassDrawable(14, darkGlassMode));
         blackBtn.setOnClickListener(v -> {
             darkGlassMode = true;
             prefs.edit().putBoolean(KEY_DARK_GLASS, true).apply();
-            rebuildScreensWithCurrentTheme();
+            rebuildKeepingScreen(1);
         });
         applyAndroid17Press(blackBtn, false);
         modeRow.addView(blackBtn, new LinearLayout.LayoutParams(0, dp(38), 1f));
@@ -890,7 +888,7 @@ public class MainActivity extends Activity {
         setWpBtn.setText("Set Photo");
         setWpBtn.setAllCaps(false);
         setWpBtn.setTextColor(primaryTextColor());
-        setWpBtn.setBackground(glassDrawable(14, true));
+        setWpBtn.setBackground(uniformGlassDrawable(14, false));
         setWpBtn.setOnClickListener(v -> pickWallpaperImage());
         applyAndroid17Press(setWpBtn, false);
         LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(0, dp(38), 1f);
@@ -901,7 +899,7 @@ public class MainActivity extends Activity {
         clearWpBtn.setText("Clear BG");
         clearWpBtn.setAllCaps(false);
         clearWpBtn.setTextColor(primaryTextColor());
-        clearWpBtn.setBackground(glassDrawable(14, false));
+        clearWpBtn.setBackground(uniformGlassDrawable(14, false));
         clearWpBtn.setOnClickListener(v -> clearWallpaperImage());
         applyAndroid17Press(clearWpBtn, false);
         wpBtnRow.addView(clearWpBtn, new LinearLayout.LayoutParams(0, dp(38), 1f));
@@ -909,21 +907,23 @@ public class MainActivity extends Activity {
         wpCard.addView(wpBtnRow, wpRowLp);
         page.addView(wpCard, topSpace(16));
 
-        // Customize Sliders Card
+        // Transparency, Visibility, Dim & Roundness Card
         LinearLayout glassCard = new LinearLayout(this);
         glassCard.setOrientation(LinearLayout.VERTICAL);
-        glassCard.setBackground(glassDrawable(cornerRadiusDp, false));
+        glassCard.setBackground(uniformGlassDrawable(cornerRadiusDp, false));
         glassCard.setPadding(dp(16), dp(14), dp(16), dp(14));
-        glassCard.addView(makeText("CUSTOMIZE GLASS & FONT", 11, accentColor(), true));
+        glassCard.addView(makeText("TRANSPARENCY, VISIBILITY & STYLE", 11, secondaryTextColor(), true));
 
-        glassCard.addView(addSliderRow("Transparency", glassAlpha, 255, val -> {
+        glassCard.addView(addSliderRow("Transparency (0 = Transparent)", glassAlpha, 255, val -> {
             glassAlpha = val;
             prefs.edit().putInt(KEY_GLASS_ALPHA, glassAlpha).apply();
+            applyLiveSurfaceStyles();
         }), topSpace(10));
 
         glassCard.addView(addSliderRow("Border Visibility", borderAlpha, 255, val -> {
             borderAlpha = val;
             prefs.edit().putInt(KEY_BORDER_ALPHA, borderAlpha).apply();
+            applyLiveSurfaceStyles();
         }), topSpace(8));
 
         glassCard.addView(addSliderRow("Wallpaper Dim", wallpaperDim, 85, val -> {
@@ -935,6 +935,7 @@ public class MainActivity extends Activity {
         glassCard.addView(addSliderRow("Corner Roundness", cornerRadiusDp, 34, val -> {
             cornerRadiusDp = Math.max(8, val);
             prefs.edit().putInt(KEY_CORNER_RADIUS, cornerRadiusDp).apply();
+            applyLiveSurfaceStyles();
         }), topSpace(8));
 
         settingsFontLabel = makeText("Editor Font: " + defaultFontSize + "sp", 13, primaryTextColor(), true);
@@ -950,7 +951,7 @@ public class MainActivity extends Activity {
         smBtn.setText("A-");
         smBtn.setAllCaps(false);
         smBtn.setTextColor(primaryTextColor());
-        smBtn.setBackground(glassDrawable(12, false));
+        smBtn.setBackground(uniformGlassDrawable(12, false));
         smBtn.setOnClickListener(v -> changeFontSize(-2));
         applyAndroid17Press(smBtn, false);
         LinearLayout.LayoutParams smLp = new LinearLayout.LayoutParams(dp(54), dp(36));
@@ -961,7 +962,7 @@ public class MainActivity extends Activity {
         lgBtn.setText("A+");
         lgBtn.setAllCaps(false);
         lgBtn.setTextColor(primaryTextColor());
-        lgBtn.setBackground(glassDrawable(12, false));
+        lgBtn.setBackground(uniformGlassDrawable(12, false));
         lgBtn.setOnClickListener(v -> changeFontSize(2));
         applyAndroid17Press(lgBtn, false);
         fontRow.addView(lgBtn, new LinearLayout.LayoutParams(dp(54), dp(36)));
@@ -972,9 +973,9 @@ public class MainActivity extends Activity {
         // Storage Card
         LinearLayout infoCard = new LinearLayout(this);
         infoCard.setOrientation(LinearLayout.VERTICAL);
-        infoCard.setBackground(glassDrawable(cornerRadiusDp, false));
+        infoCard.setBackground(uniformGlassDrawable(cornerRadiusDp, false));
         infoCard.setPadding(dp(16), dp(14), dp(16), dp(14));
-        infoCard.addView(makeText("STORAGE", 11, accentColor(), true));
+        infoCard.addView(makeText("STORAGE", 11, secondaryTextColor(), true));
         infoCard.addView(makeText("Internal storage/Mirror Note", 14.5f, primaryTextColor(), true), topSpace(4));
         settingsPermStatus = makeText("File access: Checking...", 12.5f, secondaryTextColor(), false);
         settingsTotalNotes = makeText("Total notes: 0", 12.5f, secondaryTextColor(), false);
@@ -986,7 +987,7 @@ public class MainActivity extends Activity {
         permBtn.setAllCaps(false);
         permBtn.setTextSize(13);
         permBtn.setTextColor(primaryTextColor());
-        permBtn.setBackground(glassDrawable(14, true));
+        permBtn.setBackground(uniformGlassDrawable(14, false));
         permBtn.setOnClickListener(v -> requestManageAllFilesPermission());
         applyAndroid17Press(permBtn, false);
         LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(
@@ -997,6 +998,16 @@ public class MainActivity extends Activity {
         page.addView(infoCard, topSpace(14));
 
         return scroll;
+    }
+
+    private void applyLiveSurfaceStyles() {
+        if (searchInput != null && searchInput.getParent() instanceof View) {
+            ((View) searchInput.getParent()).setBackground(uniformGlassDrawable(18, false));
+        }
+        if (editorBottomBar != null) {
+            editorBottomBar.setBackground(uniformGlassDrawable(24, false));
+        }
+        renderNotesList();
     }
 
     private interface SliderCallback {
@@ -1047,7 +1058,7 @@ public class MainActivity extends Activity {
 
     private View hairline() {
         View v = new View(this);
-        int div = darkGlassMode ? 0x1FFFFFFF : 0x1A0F172A;
+        int div = darkGlassMode ? 0x26FFFFFF : 0x1F0F172A;
         v.setBackgroundColor(div);
         v.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
         return v;
@@ -1532,7 +1543,7 @@ public class MainActivity extends Activity {
 
         if (filtered.isEmpty()) {
             String msg = !hasStorageAccess()
-                    ? "Tap + to allow file access."
+                    ? "Tap + or Settings to allow file access."
                     : (query.isEmpty() ? "No notes yet. Tap + to write." : "No matching notes.");
             TextView empty = makeText(msg, 14, secondaryTextColor(), false);
             empty.setPadding(dp(2), dp(36), dp(2), dp(24));
@@ -1549,7 +1560,7 @@ public class MainActivity extends Activity {
 
             if (item.pinned && !hasPinnedHeader) {
                 hasPinnedHeader = true;
-                TextView pHdr = makeText("PINNED", 11, accentColor(), true);
+                TextView pHdr = makeText("PINNED", 11, primaryTextColor(), true);
                 LinearLayout.LayoutParams hLp = new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
                 hLp.topMargin = dp(4);
