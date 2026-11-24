@@ -1,6 +1,5 @@
 package com.mirrornote.app;
 
-import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ClipData;
@@ -10,11 +9,8 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
-import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.Paint;
-import android.graphics.RadialGradient;
-import android.graphics.Shader;
+import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.GradientDrawable;
@@ -32,12 +28,10 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.animation.LinearInterpolator;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
-import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -67,18 +61,13 @@ public class MainActivity extends Activity {
 
     private static final int REQ_PICK_WALLPAPER = 204;
 
-    private static final int COLOR_BG_WHITE = 0xFFF7F9FC;
-    private static final int COLOR_TEXT_PRIMARY = 0xFF0F172A;
-    private static final int COLOR_TEXT_SECONDARY = 0xFF64748B;
-    private static final int COLOR_ACCENT_BLUE = 0xFF2563EB;
-    private static final int COLOR_DIVIDER = 0x1A0F172A;
-
     private static final String PREFS_NAME = "mirror_note_prefs";
     private static final String KEY_PINNED = "pinned_files";
     private static final String KEY_FAV = "fav_files";
     private static final String KEY_CREATED_MAP = "created_map_json";
     private static final String KEY_SORT_MODE = "sort_mode";
     private static final String KEY_FONT_SIZE = "font_size_sp";
+    private static final String KEY_DARK_GLASS = "dark_glass_mode";
     private static final String KEY_GLASS_ALPHA = "glass_alpha";
     private static final String KEY_BORDER_ALPHA = "border_alpha";
     private static final String KEY_WP_DIM = "wp_dim";
@@ -112,77 +101,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    private static class BlueSmokeBackgroundView extends View {
-        private final Paint puffPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private ValueAnimator smokeAnimator;
-        private float phase = 0f;
-
-        BlueSmokeBackgroundView(Context context) {
-            super(context);
-            startSmoke();
-        }
-
-        private void startSmoke() {
-            smokeAnimator = ValueAnimator.ofFloat(0f, 1f);
-            smokeAnimator.setDuration(15000);
-            smokeAnimator.setRepeatCount(ValueAnimator.INFINITE);
-            smokeAnimator.setRepeatMode(ValueAnimator.REVERSE);
-            smokeAnimator.setInterpolator(new LinearInterpolator());
-            smokeAnimator.addUpdateListener(anim -> {
-                phase = (float) anim.getAnimatedValue();
-                invalidate();
-            });
-            smokeAnimator.start();
-        }
-
-        @Override
-        protected void onDetachedFromWindow() {
-            super.onDetachedFromWindow();
-            if (smokeAnimator != null) {
-                smokeAnimator.cancel();
-            }
-        }
-
-        @Override
-        protected void onDraw(Canvas canvas) {
-            super.onDraw(canvas);
-            float w = getWidth();
-            float h = getHeight();
-            if (w <= 0 || h <= 0) return;
-
-            canvas.drawColor(COLOR_BG_WHITE);
-
-            drawSmokeCloud(canvas,
-                    w * (0.20f + 0.14f * phase),
-                    h * (0.16f - 0.06f * phase),
-                    Math.max(w, h) * 0.56f,
-                    0x2E38BDF8, 0x1260A5FA);
-
-            drawSmokeCloud(canvas,
-                    w * (0.82f - 0.16f * phase),
-                    h * (0.46f + 0.09f * phase),
-                    Math.max(w, h) * 0.62f,
-                    0x2460A5FA, 0x0E93C5FD);
-
-            drawSmokeCloud(canvas,
-                    w * (0.36f + 0.18f * (1f - phase)),
-                    h * (0.82f - 0.10f * phase),
-                    Math.max(w, h) * 0.65f,
-                    0x293B82F6, 0x107DD3FC);
-        }
-
-        private void drawSmokeCloud(Canvas canvas, float cx, float cy, float radius,
-                                    int innerColor, int midColor) {
-            RadialGradient grad = new RadialGradient(
-                    cx, cy, radius,
-                    new int[]{innerColor, midColor, Color.TRANSPARENT},
-                    new float[]{0f, 0.52f, 1f},
-                    Shader.TileMode.CLAMP);
-            puffPaint.setShader(grad);
-            canvas.drawCircle(cx, cy, radius, puffPaint);
-        }
-    }
-
     private FrameLayout rootContainer;
     private ImageView wallpaperImageView;
     private View wallpaperDimOverlay;
@@ -190,7 +108,9 @@ public class MainActivity extends Activity {
     private View homeScreen;
     private View editorScreen;
     private View settingsScreen;
+    private View editorBottomBar;
 
+    private TextView homeTitleView;
     private TextView countSummaryView;
     private EditText searchInput;
     private View clearSearchBtn;
@@ -205,6 +125,7 @@ public class MainActivity extends Activity {
     private TextView settingsTotalNotes;
     private TextView settingsFontLabel;
     private TextView settingsWpPathLabel;
+    private TextView settingsThemeModeLabel;
 
     private SharedPreferences prefs;
     private File notesFolder;
@@ -212,10 +133,11 @@ public class MainActivity extends Activity {
 
     private int sortMode = SORT_EDITED;
     private int defaultFontSize = 17;
-    private int glassAlpha = 215;     // 0..255
-    private int borderAlpha = 45;     // 0..255
-    private int wallpaperDim = 25;    // 0..85 (%)
-    private int cornerRadiusDp = 22;  // 8..34
+    private boolean darkGlassMode = false; // false = White Glass, true = Black Glass
+    private int glassAlpha = 195;          // 0..255
+    private int borderAlpha = 45;          // 0..255
+    private int wallpaperDim = 22;         // 0..85
+    private int cornerRadiusDp = 22;       // 8..34
 
     private String currentEditingFileName = null;
     private String lastSavedSignature = "";
@@ -223,7 +145,6 @@ public class MainActivity extends Activity {
     private final List<String> undoStack = new ArrayList<>();
     private final List<String> redoStack = new ArrayList<>();
 
-    private File lastDeletedFile = null;
     private byte[] lastDeletedBytes = null;
     private String lastDeletedName = null;
 
@@ -236,14 +157,16 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         sortMode = prefs.getInt(KEY_SORT_MODE, SORT_EDITED);
         defaultFontSize = prefs.getInt(KEY_FONT_SIZE, 17);
-        glassAlpha = prefs.getInt(KEY_GLASS_ALPHA, 215);
+        darkGlassMode = prefs.getBoolean(KEY_DARK_GLASS, false);
+        glassAlpha = prefs.getInt(KEY_GLASS_ALPHA, 195);
         borderAlpha = prefs.getInt(KEY_BORDER_ALPHA, 45);
-        wallpaperDim = prefs.getInt(KEY_WP_DIM, 25);
+        wallpaperDim = prefs.getInt(KEY_WP_DIM, 22);
         cornerRadiusDp = prefs.getInt(KEY_CORNER_RADIUS, 22);
 
-        setupWindowTheme();
+        setupWindowAndTheme();
         buildRootLayout();
         applySavedWallpaperAndDim();
+        attachKeyboardLiftListener();
         showHomeScreen();
         checkPermissionAndLoad(false);
     }
@@ -271,11 +194,35 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void setupWindowTheme() {
-        getWindow().setStatusBarColor(COLOR_BG_WHITE);
-        getWindow().setNavigationBarColor(COLOR_BG_WHITE);
+    private int bgColor() {
+        return darkGlassMode ? 0xFF07090D : 0xFFF7F9FC;
+    }
+
+    private int primaryTextColor() {
+        return darkGlassMode ? 0xFFFFFFFF : 0xFF0F172A;
+    }
+
+    private int secondaryTextColor() {
+        return darkGlassMode ? 0xFFA1A1AA : 0xFF64748B;
+    }
+
+    private int accentColor() {
+        return darkGlassMode ? 0xFFAAB8FF : 0xFF2563EB;
+    }
+
+    private void setupWindowAndTheme() {
+        int bg = bgColor();
+        getWindow().setStatusBarColor(bg);
+        getWindow().setNavigationBarColor(bg);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
+            View decor = getWindow().getDecorView();
+            int flags = decor.getSystemUiVisibility();
+            if (darkGlassMode) {
+                flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            } else {
+                flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            }
+            decor.setSystemUiVisibility(flags);
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             getWindow().getAttributes().layoutInDisplayCutoutMode =
@@ -287,26 +234,26 @@ public class MainActivity extends Activity {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
-    private GradientDrawable whiteGlassDrawable(int radiusDp, boolean accentBorder) {
+    private GradientDrawable glassDrawable(int radiusDp, boolean accentBorder) {
         GradientDrawable d = new GradientDrawable();
-        int clampedAlpha = Math.max(0, Math.min(255, glassAlpha));
-        int fill = (clampedAlpha << 24) | 0x00FFFFFF;
-        int clampedBorder = Math.max(0, Math.min(255, borderAlpha));
-        int stroke = accentBorder ? 0x662563EB : ((clampedBorder << 24) | 0x000F172A);
-        d.setColor(fill);
+        int alpha = Math.max(0, Math.min(255, glassAlpha));
+        int baseRgb = darkGlassMode ? 0x00141822 : 0x00FFFFFF;
+        d.setColor((alpha << 24) | baseRgb);
         d.setCornerRadius(dp(radiusDp));
+        int bAlpha = Math.max(0, Math.min(255, borderAlpha));
+        int bRgb = darkGlassMode ? 0x00FFFFFF : 0x000F172A;
+        int stroke = accentBorder ? accentColor() : ((bAlpha << 24) | bRgb);
         d.setStroke(dp(1), stroke);
         return d;
     }
 
-    private GradientDrawable bluePillDrawable(int radiusDp) {
+    private GradientDrawable accentPillDrawable(int radiusDp) {
         GradientDrawable d = new GradientDrawable();
-        d.setColor(COLOR_ACCENT_BLUE);
+        d.setColor(accentColor());
         d.setCornerRadius(dp(radiusDp));
         return d;
     }
 
-    // Android 17 floating spring-like touch response
     private void applyAndroid17Press(View v, boolean isFab) {
         v.setOnTouchListener((view, event) -> {
             switch (event.getAction()) {
@@ -327,8 +274,8 @@ public class MainActivity extends Activity {
                             .scaleY(1f)
                             .translationY(0f)
                             .alpha(1f)
-                            .setDuration(260)
-                            .setInterpolator(new android.view.animation.OvershootInterpolator(1.25f))
+                            .setDuration(250)
+                            .setInterpolator(new android.view.animation.OvershootInterpolator(1.22f))
                             .start();
                     break;
             }
@@ -341,13 +288,13 @@ public class MainActivity extends Activity {
         screen.setAlpha(0f);
         screen.setScaleX(0.985f);
         screen.setScaleY(0.985f);
-        screen.setTranslationY(dp(16));
+        screen.setTranslationY(dp(14));
         screen.animate()
                 .alpha(1f)
                 .scaleX(1f)
                 .scaleY(1f)
                 .translationY(0f)
-                .setDuration(300)
+                .setDuration(280)
                 .setInterpolator(new android.view.animation.DecelerateInterpolator(2.0f))
                 .start();
     }
@@ -357,21 +304,15 @@ public class MainActivity extends Activity {
         tv.setText(text);
         tv.setTextSize(sp);
         tv.setTextColor(color);
-        if (bold) {
-            tv.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
-        } else {
-            tv.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
-        }
+        tv.setTypeface(Typeface.create(bold ? "sans-serif-medium" : "sans-serif",
+                bold ? Typeface.BOLD : Typeface.NORMAL));
         return tv;
     }
 
     private void buildRootLayout() {
         rootContainer = new FrameLayout(this);
+        rootContainer.setBackgroundColor(bgColor());
         rootContainer.setLayoutParams(new ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-
-        BlueSmokeBackgroundView smokeBg = new BlueSmokeBackgroundView(this);
-        rootContainer.addView(smokeBg, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         wallpaperImageView = new ImageView(this);
@@ -381,7 +322,6 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         wallpaperDimOverlay = new View(this);
-        wallpaperDimOverlay.setBackgroundColor(Color.argb(60, 255, 255, 255));
         rootContainer.addView(wallpaperDimOverlay, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -399,7 +339,29 @@ public class MainActivity extends Activity {
         setContentView(rootContainer);
     }
 
-    // ==================== WALLPAPER & CUSTOMIZATION ====================
+    // Ensures bottom bar lifts cleanly above open keyboard even on OEM/gesture devices
+    private void attachKeyboardLiftListener() {
+        if (rootContainer == null) return;
+        rootContainer.getViewTreeObserver().addOnGlobalLayoutListener(() -> {
+            if (editorBottomBar == null || editorScreen == null || editorScreen.getVisibility() != View.VISIBLE) {
+                return;
+            }
+            Rect r = new Rect();
+            rootContainer.getWindowVisibleDisplayFrame(r);
+            int screenHeight = rootContainer.getRootView().getHeight();
+            int keypadHeight = screenHeight - r.bottom;
+            float lift = keypadHeight > dp(120) ? -keypadHeight + dp(12) : 0f;
+            if (Math.abs(editorBottomBar.getTranslationY() - lift) > 1f) {
+                editorBottomBar.animate()
+                        .translationY(lift)
+                        .setDuration(180)
+                        .setInterpolator(new android.view.animation.DecelerateInterpolator(1.8f))
+                        .start();
+            }
+        });
+    }
+
+    // ==================== WALLPAPER & THEME ====================
     private void pickWallpaperImage() {
         Intent intent = new Intent(Intent.ACTION_PICK);
         intent.setType("image/*");
@@ -470,11 +432,22 @@ public class MainActivity extends Activity {
         }
         if (wallpaperDimOverlay != null) {
             int alpha = Math.round((wallpaperDim / 100f) * 210f);
-            wallpaperDimOverlay.setBackgroundColor(Color.argb(alpha, 255, 255, 255));
+            int tint = darkGlassMode ? Color.argb(alpha, 0, 0, 0) : Color.argb(alpha, 255, 255, 255);
+            wallpaperDimOverlay.setBackgroundColor(tint);
         }
     }
 
-    // ==================== HOME SCREEN ====================
+    private void rebuildScreensWithCurrentTheme() {
+        setupWindowAndTheme();
+        applySavedWallpaperAndDim();
+        buildRootLayout();
+        applySavedWallpaperAndDim();
+        attachKeyboardLiftListener();
+        showSettingsScreen();
+        checkPermissionAndLoad(false);
+    }
+
+    // ==================== CLEAN HOME SCREEN ====================
     private View buildHomeScreen() {
         FrameLayout wrapper = new FrameLayout(this);
         wrapper.setLayoutParams(new FrameLayout.LayoutParams(
@@ -483,61 +456,50 @@ public class MainActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.setClipToPadding(false);
-        scroll.setPadding(0, 0, 0, dp(104));
+        scroll.setPadding(0, 0, 0, dp(96));
 
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
         page.setPadding(dp(20), dp(28), dp(20), dp(24));
         scroll.addView(page);
 
+        // Clean Header: Logo + App Name + Notes count (no corner wallpaper/settings clutter)
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
 
-        TextView logoBadge = makeText("M", 15, Color.WHITE, true);
+        TextView logoBadge = makeText("M", 15, darkGlassMode ? 0xFF07090D : Color.WHITE, true);
         logoBadge.setGravity(Gravity.CENTER);
-        logoBadge.setBackground(bluePillDrawable(12));
+        logoBadge.setBackground(accentPillDrawable(12));
         LinearLayout.LayoutParams logoLp = new LinearLayout.LayoutParams(dp(34), dp(34));
         logoLp.rightMargin = dp(10);
         topBar.addView(logoBadge, logoLp);
 
         LinearLayout titleCol = new LinearLayout(this);
         titleCol.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout.LayoutParams titleColLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        titleCol.addView(makeText("Notes", 28, COLOR_TEXT_PRIMARY, true));
-        countSummaryView = makeText("0 notes", 12, COLOR_TEXT_SECONDARY, false);
+        homeTitleView = makeText("Mirror Note", 26, primaryTextColor(), true);
+        countSummaryView = makeText("0 notes", 12, secondaryTextColor(), false);
+        titleCol.addView(homeTitleView);
         titleCol.addView(countSummaryView);
-        topBar.addView(titleCol, titleColLp);
-
-        Button settingsBtn = new Button(this);
-        settingsBtn.setText("Settings");
-        settingsBtn.setAllCaps(false);
-        settingsBtn.setTextSize(12.5f);
-        settingsBtn.setTextColor(COLOR_TEXT_PRIMARY);
-        settingsBtn.setBackground(whiteGlassDrawable(16, false));
-        settingsBtn.setElevation(dp(2));
-        settingsBtn.setPadding(dp(14), dp(7), dp(14), dp(7));
-        settingsBtn.setOnClickListener(v -> showSettingsScreen());
-        applyAndroid17Press(settingsBtn, false);
-        topBar.addView(settingsBtn);
+        topBar.addView(titleCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         page.addView(topBar);
 
+        // Search Bar
         LinearLayout searchRow = new LinearLayout(this);
         searchRow.setOrientation(LinearLayout.HORIZONTAL);
         searchRow.setGravity(Gravity.CENTER_VERTICAL);
-        searchRow.setBackground(whiteGlassDrawable(18, false));
-        searchRow.setElevation(dp(2));
+        searchRow.setBackground(glassDrawable(18, false));
         searchRow.setPadding(dp(14), dp(2), dp(8), dp(2));
         LinearLayout.LayoutParams searchLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(44));
         searchLp.topMargin = dp(16);
-        searchLp.bottomMargin = dp(12);
+        searchLp.bottomMargin = dp(14);
 
         searchInput = new EditText(this);
         searchInput.setHint("Search");
-        searchInput.setHintTextColor(COLOR_TEXT_SECONDARY);
-        searchInput.setTextColor(COLOR_TEXT_PRIMARY);
+        searchInput.setHintTextColor(secondaryTextColor());
+        searchInput.setTextColor(primaryTextColor());
         searchInput.setTextSize(15);
         searchInput.setSingleLine(true);
         searchInput.setBackgroundColor(Color.TRANSPARENT);
@@ -555,7 +517,7 @@ public class MainActivity extends Activity {
         Button clearBtn = new Button(this);
         clearBtn.setText("×");
         clearBtn.setTextSize(16);
-        clearBtn.setTextColor(COLOR_TEXT_SECONDARY);
+        clearBtn.setTextColor(secondaryTextColor());
         clearBtn.setBackgroundColor(Color.TRANSPARENT);
         clearBtn.setMinimumWidth(0);
         clearBtn.setMinimumHeight(0);
@@ -567,106 +529,90 @@ public class MainActivity extends Activity {
 
         page.addView(searchRow, searchLp);
 
-        HorizontalScrollView sortScroll = new HorizontalScrollView(this);
-        sortScroll.setHorizontalScrollBarEnabled(false);
-        LinearLayout sortRow = new LinearLayout(this);
-        sortRow.setOrientation(LinearLayout.HORIZONTAL);
-        sortScroll.addView(sortRow);
-
-        String[] sortLabels = {"Recent", "Created", "A–Z"};
-        int[] sortModes = {SORT_EDITED, SORT_CREATED, SORT_ALPHA};
-        for (int i = 0; i < sortLabels.length; i++) {
-            final int mode = sortModes[i];
-            Button chip = new Button(this);
-            chip.setText(sortLabels[i]);
-            chip.setAllCaps(false);
-            chip.setTextSize(12);
-            boolean active = (sortMode == mode);
-            chip.setTextColor(active ? Color.WHITE : COLOR_TEXT_SECONDARY);
-            chip.setBackground(active ? bluePillDrawable(14) : whiteGlassDrawable(14, false));
-            chip.setPadding(dp(14), dp(6), dp(14), dp(6));
-            chip.setMinimumHeight(0);
-            chip.setOnClickListener(v -> {
-                sortMode = mode;
-                prefs.edit().putInt(KEY_SORT_MODE, sortMode).apply();
-                showHomeScreen();
-            });
-            applyAndroid17Press(chip, false);
-            LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, dp(32));
-            cLp.rightMargin = dp(8);
-            sortRow.addView(chip, cLp);
-        }
-        LinearLayout.LayoutParams sortLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        sortLp.bottomMargin = dp(12);
-        page.addView(sortScroll, sortLp);
-
         notesListContainer = new LinearLayout(this);
         notesListContainer.setOrientation(LinearLayout.VERTICAL);
         page.addView(notesListContainer);
 
         wrapper.addView(scroll);
 
-        // Bottom Floating Bar on Home Screen (New Note + Wallpaper + Settings)
-        LinearLayout homeBottomBar = new LinearLayout(this);
-        homeBottomBar.setOrientation(LinearLayout.HORIZONTAL);
-        homeBottomBar.setGravity(Gravity.CENTER_VERTICAL);
-        homeBottomBar.setBackground(whiteGlassDrawable(26, false));
-        homeBottomBar.setElevation(dp(8));
-        homeBottomBar.setPadding(dp(14), dp(7), dp(14), dp(7));
+        // Home Bottom Toggle Bar: Recent | Created | A-Z | + / Settings
+        LinearLayout homeDock = new LinearLayout(this);
+        homeDock.setOrientation(LinearLayout.HORIZONTAL);
+        homeDock.setGravity(Gravity.CENTER_VERTICAL);
+        homeDock.setBackground(glassDrawable(24, false));
+        homeDock.setElevation(dp(8));
+        homeDock.setPadding(dp(8), dp(6), dp(8), dp(6));
 
-        Button wpQuickBtn = new Button(this);
-        wpQuickBtn.setText("Wallpaper");
-        wpQuickBtn.setAllCaps(false);
-        wpQuickBtn.setTextSize(12.5f);
-        wpQuickBtn.setTextColor(COLOR_TEXT_PRIMARY);
-        wpQuickBtn.setBackgroundColor(Color.TRANSPARENT);
-        wpQuickBtn.setOnClickListener(v -> pickWallpaperImage());
-        applyAndroid17Press(wpQuickBtn, false);
-        homeBottomBar.addView(wpQuickBtn, new LinearLayout.LayoutParams(0, dp(40), 1f));
+        String[] sortLabels = {"Recent", "Created", "A–Z"};
+        int[] sortModes = {SORT_EDITED, SORT_CREATED, SORT_ALPHA};
+        for (int i = 0; i < sortLabels.length; i++) {
+            final int mode = sortModes[i];
+            Button tabBtn = new Button(this);
+            tabBtn.setText(sortLabels[i]);
+            tabBtn.setAllCaps(false);
+            tabBtn.setTextSize(12.5f);
+            boolean active = (sortMode == mode);
+            tabBtn.setTextColor(active ? (darkGlassMode ? 0xFF07090D : Color.WHITE) : secondaryTextColor());
+            tabBtn.setBackground(active ? accentPillDrawable(16) : new GradientDrawable());
+            tabBtn.setMinimumHeight(0);
+            tabBtn.setOnClickListener(v -> {
+                sortMode = mode;
+                prefs.edit().putInt(KEY_SORT_MODE, sortMode).apply();
+                showHomeScreen();
+            });
+            applyAndroid17Press(tabBtn, false);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(38), 1f);
+            lp.rightMargin = dp(4);
+            homeDock.addView(tabBtn, lp);
+        }
 
-        Button newNoteBarBtn = new Button(this);
-        newNoteBarBtn.setText("+ New Note");
-        newNoteBarBtn.setAllCaps(false);
-        newNoteBarBtn.setTextSize(13);
-        newNoteBarBtn.setTextColor(Color.WHITE);
-        newNoteBarBtn.setBackground(bluePillDrawable(18));
-        newNoteBarBtn.setPadding(dp(16), 0, dp(16), 0);
-        newNoteBarBtn.setOnClickListener(v -> openEditorForNewNote());
-        applyAndroid17Press(newNoteBarBtn, true);
-        homeBottomBar.addView(newNoteBarBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40)));
+        Button newBtn = new Button(this);
+        newBtn.setText("+");
+        newBtn.setTextSize(18);
+        newBtn.setTextColor(darkGlassMode ? 0xFF07090D : Color.WHITE);
+        newBtn.setBackground(accentPillDrawable(16));
+        newBtn.setOnClickListener(v -> openEditorForNewNote());
+        newBtn.setOnLongClickListener(v -> {
+            showSettingsScreen();
+            return true;
+        });
+        applyAndroid17Press(newBtn, true);
+        LinearLayout.LayoutParams nLp = new LinearLayout.LayoutParams(dp(44), dp(38));
+        nLp.rightMargin = dp(4);
+        homeDock.addView(newBtn, nLp);
 
-        Button customizeBarBtn = new Button(this);
-        customizeBarBtn.setText("Customize");
-        customizeBarBtn.setAllCaps(false);
-        customizeBarBtn.setTextSize(12.5f);
-        customizeBarBtn.setTextColor(COLOR_TEXT_PRIMARY);
-        customizeBarBtn.setBackgroundColor(Color.TRANSPARENT);
-        customizeBarBtn.setOnClickListener(v -> showSettingsScreen());
-        applyAndroid17Press(customizeBarBtn, false);
-        homeBottomBar.addView(customizeBarBtn, new LinearLayout.LayoutParams(0, dp(40), 1f));
+        Button gearBtn = new Button(this);
+        gearBtn.setText("⚙");
+        gearBtn.setTextSize(15);
+        gearBtn.setTextColor(primaryTextColor());
+        gearBtn.setBackground(glassDrawable(16, false));
+        gearBtn.setOnClickListener(v -> showSettingsScreen());
+        applyAndroid17Press(gearBtn, false);
+        homeDock.addView(gearBtn, new LinearLayout.LayoutParams(dp(40), dp(38)));
 
-        FrameLayout.LayoutParams hbLp = new FrameLayout.LayoutParams(
+        FrameLayout.LayoutParams hdLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        hbLp.gravity = Gravity.BOTTOM;
-        hbLp.leftMargin = dp(20);
-        hbLp.rightMargin = dp(20);
-        hbLp.bottomMargin = dp(16);
-        wrapper.addView(homeBottomBar, hbLp);
+        hdLp.gravity = Gravity.BOTTOM;
+        hdLp.leftMargin = dp(16);
+        hdLp.rightMargin = dp(16);
+        hdLp.bottomMargin = dp(16);
+        wrapper.addView(homeDock, hdLp);
 
         return wrapper;
     }
 
-    // ==================== FULL-SCREEN EDITOR (BOTTOM BAR ABOVE KEYBOARD) ====================
+    // ==================== FULL-SCREEN EDITOR ====================
     private View buildEditorScreen() {
+        FrameLayout wrapper = new FrameLayout(this);
+        wrapper.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
         LinearLayout screen = new LinearLayout(this);
         screen.setOrientation(LinearLayout.VERTICAL);
-        screen.setLayoutParams(new ViewGroup.LayoutParams(
+        screen.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        screen.setPadding(dp(18), dp(22), dp(18), dp(12));
+        screen.setPadding(dp(18), dp(22), dp(18), dp(74));
 
-        // Top Bar: Back + More + Done
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
@@ -674,9 +620,8 @@ public class MainActivity extends Activity {
         Button backBtn = new Button(this);
         backBtn.setText("←");
         backBtn.setTextSize(18);
-        backBtn.setTextColor(COLOR_TEXT_PRIMARY);
-        backBtn.setBackground(whiteGlassDrawable(18, false));
-        backBtn.setElevation(dp(2));
+        backBtn.setTextColor(primaryTextColor());
+        backBtn.setBackground(glassDrawable(18, false));
         backBtn.setOnClickListener(v -> {
             performAutosave();
             hideKeyboard(editorBodyInput);
@@ -691,9 +636,8 @@ public class MainActivity extends Activity {
         Button moreBtn = new Button(this);
         moreBtn.setText("⋮");
         moreBtn.setTextSize(17);
-        moreBtn.setTextColor(COLOR_TEXT_PRIMARY);
-        moreBtn.setBackground(whiteGlassDrawable(18, false));
-        moreBtn.setElevation(dp(2));
+        moreBtn.setTextColor(primaryTextColor());
+        moreBtn.setBackground(glassDrawable(18, false));
         moreBtn.setOnClickListener(v -> showEditorMoreOptions());
         applyAndroid17Press(moreBtn, false);
         LinearLayout.LayoutParams moreLp = new LinearLayout.LayoutParams(dp(38), dp(38));
@@ -704,9 +648,8 @@ public class MainActivity extends Activity {
         doneBtn.setText("Done");
         doneBtn.setAllCaps(false);
         doneBtn.setTextSize(13.5f);
-        doneBtn.setTextColor(Color.WHITE);
-        doneBtn.setBackground(bluePillDrawable(18));
-        doneBtn.setElevation(dp(3));
+        doneBtn.setTextColor(darkGlassMode ? 0xFF07090D : Color.WHITE);
+        doneBtn.setBackground(accentPillDrawable(18));
         doneBtn.setPadding(dp(16), 0, dp(16), 0);
         doneBtn.setOnClickListener(v -> {
             saveCurrentNote(true);
@@ -718,7 +661,7 @@ public class MainActivity extends Activity {
 
         screen.addView(topBar);
 
-        editorTimestampView = makeText(currentTimestampLabel(), 12, COLOR_TEXT_SECONDARY, false);
+        editorTimestampView = makeText(currentTimestampLabel(), 12, secondaryTextColor(), false);
         LinearLayout.LayoutParams tsLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         tsLp.topMargin = dp(10);
@@ -726,8 +669,8 @@ public class MainActivity extends Activity {
 
         editorTitleInput = new EditText(this);
         editorTitleInput.setHint("Title");
-        editorTitleInput.setHintTextColor(COLOR_TEXT_SECONDARY);
-        editorTitleInput.setTextColor(COLOR_TEXT_PRIMARY);
+        editorTitleInput.setHintTextColor(secondaryTextColor());
+        editorTitleInput.setTextColor(primaryTextColor());
         editorTitleInput.setTextSize(24);
         editorTitleInput.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
         editorTitleInput.setSingleLine(true);
@@ -737,7 +680,7 @@ public class MainActivity extends Activity {
         titleLp.topMargin = dp(8);
         screen.addView(editorTitleInput, titleLp);
 
-        editorMetaView = makeText("0 words • 0 chars", 11.5f, COLOR_TEXT_SECONDARY, false);
+        editorMetaView = makeText("0 words • 0 chars", 11.5f, secondaryTextColor(), false);
         LinearLayout.LayoutParams metaLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         metaLp.topMargin = dp(4);
@@ -746,8 +689,8 @@ public class MainActivity extends Activity {
 
         editorBodyInput = new EditText(this);
         editorBodyInput.setHint("Start writing...");
-        editorBodyInput.setHintTextColor(COLOR_TEXT_SECONDARY);
-        editorBodyInput.setTextColor(COLOR_TEXT_PRIMARY);
+        editorBodyInput.setHintTextColor(secondaryTextColor());
+        editorBodyInput.setTextColor(primaryTextColor());
         editorBodyInput.setTextSize(defaultFontSize);
         editorBodyInput.setLineSpacing(dp(5), 1.18f);
         editorBodyInput.setGravity(Gravity.TOP | Gravity.START);
@@ -779,20 +722,22 @@ public class MainActivity extends Activity {
         screen.addView(editorBodyInput, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        // Bottom Toolbar inside linear layout -> automatically moves above keyboard with adjustResize
+        wrapper.addView(screen);
+
+        // Bottom Toolbar: Undo | Redo | Select All | Share (lifts above keyboard)
         LinearLayout bottomBar = new LinearLayout(this);
         bottomBar.setOrientation(LinearLayout.HORIZONTAL);
         bottomBar.setGravity(Gravity.CENTER_VERTICAL);
-        bottomBar.setBackground(whiteGlassDrawable(24, false));
-        bottomBar.setElevation(dp(6));
-        bottomBar.setPadding(dp(10), dp(6), dp(10), dp(6));
+        bottomBar.setBackground(glassDrawable(24, false));
+        bottomBar.setElevation(dp(8));
+        bottomBar.setPadding(dp(8), dp(6), dp(8), dp(6));
 
         Button undoBtn = new Button(this);
         undoBtn.setText("Undo");
         undoBtn.setAllCaps(false);
         undoBtn.setTextSize(12.5f);
-        undoBtn.setTextColor(COLOR_TEXT_PRIMARY);
-        undoBtn.setBackground(whiteGlassDrawable(14, false));
+        undoBtn.setTextColor(primaryTextColor());
+        undoBtn.setBackground(glassDrawable(14, false));
         undoBtn.setOnClickListener(v -> performUndo());
         applyAndroid17Press(undoBtn, false);
         LinearLayout.LayoutParams uLp = new LinearLayout.LayoutParams(0, dp(38), 1f);
@@ -803,8 +748,8 @@ public class MainActivity extends Activity {
         redoBtn.setText("Redo");
         redoBtn.setAllCaps(false);
         redoBtn.setTextSize(12.5f);
-        redoBtn.setTextColor(COLOR_TEXT_PRIMARY);
-        redoBtn.setBackground(whiteGlassDrawable(14, false));
+        redoBtn.setTextColor(primaryTextColor());
+        redoBtn.setBackground(glassDrawable(14, false));
         redoBtn.setOnClickListener(v -> performRedo());
         applyAndroid17Press(redoBtn, false);
         LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(0, dp(38), 1f);
@@ -815,8 +760,8 @@ public class MainActivity extends Activity {
         selectAllBtn.setText("Select All");
         selectAllBtn.setAllCaps(false);
         selectAllBtn.setTextSize(12.5f);
-        selectAllBtn.setTextColor(COLOR_TEXT_PRIMARY);
-        selectAllBtn.setBackground(whiteGlassDrawable(14, false));
+        selectAllBtn.setTextColor(primaryTextColor());
+        selectAllBtn.setBackground(glassDrawable(14, false));
         selectAllBtn.setOnClickListener(v -> selectAllInEditor());
         applyAndroid17Press(selectAllBtn, false);
         LinearLayout.LayoutParams saLp = new LinearLayout.LayoutParams(0, dp(38), 1.15f);
@@ -827,18 +772,22 @@ public class MainActivity extends Activity {
         shareBtn.setText("Share");
         shareBtn.setAllCaps(false);
         shareBtn.setTextSize(12.5f);
-        shareBtn.setTextColor(Color.WHITE);
-        shareBtn.setBackground(bluePillDrawable(14));
+        shareBtn.setTextColor(darkGlassMode ? 0xFF07090D : Color.WHITE);
+        shareBtn.setBackground(accentPillDrawable(14));
         shareBtn.setOnClickListener(v -> shareEditorContent());
         applyAndroid17Press(shareBtn, false);
         bottomBar.addView(shareBtn, new LinearLayout.LayoutParams(0, dp(38), 1f));
 
-        LinearLayout.LayoutParams bbLp = new LinearLayout.LayoutParams(
+        editorBottomBar = bottomBar;
+        FrameLayout.LayoutParams bbLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        bbLp.topMargin = dp(8);
-        screen.addView(bottomBar, bbLp);
+        bbLp.gravity = Gravity.BOTTOM;
+        bbLp.leftMargin = dp(18);
+        bbLp.rightMargin = dp(18);
+        bbLp.bottomMargin = dp(14);
+        wrapper.addView(bottomBar, bbLp);
 
-        return screen;
+        return wrapper;
     }
 
     private void selectAllInEditor() {
@@ -851,7 +800,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    // ==================== CUSTOMIZE & SETTINGS SCREEN ====================
+    // ==================== SETTINGS & CUSTOMIZE ====================
     private View buildSettingsScreen() {
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
@@ -870,65 +819,104 @@ public class MainActivity extends Activity {
         Button backBtn = new Button(this);
         backBtn.setText("←");
         backBtn.setTextSize(18);
-        backBtn.setTextColor(COLOR_TEXT_PRIMARY);
-        backBtn.setBackground(whiteGlassDrawable(18, false));
+        backBtn.setTextColor(primaryTextColor());
+        backBtn.setBackground(glassDrawable(18, false));
         backBtn.setOnClickListener(v -> showHomeScreen());
         applyAndroid17Press(backBtn, false);
         top.addView(backBtn, new LinearLayout.LayoutParams(dp(40), dp(40)));
 
-        TextView heading = makeText("Settings & Customize", 21, COLOR_TEXT_PRIMARY, true);
+        TextView heading = makeText("Settings", 22, primaryTextColor(), true);
         LinearLayout.LayoutParams hLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         hLp.leftMargin = dp(12);
         top.addView(heading, hLp);
         page.addView(top);
 
-        // Wallpaper Card
+        // Theme & Wallpaper Card
         LinearLayout wpCard = new LinearLayout(this);
         wpCard.setOrientation(LinearLayout.VERTICAL);
-        wpCard.setBackground(whiteGlassDrawable(cornerRadiusDp, false));
+        wpCard.setBackground(glassDrawable(cornerRadiusDp, false));
         wpCard.setPadding(dp(16), dp(14), dp(16), dp(14));
-        wpCard.addView(makeText("WALLPAPER", 11, COLOR_ACCENT_BLUE, true));
-        settingsWpPathLabel = makeText("Default: White + Soft Blue Smoke", 13, COLOR_TEXT_SECONDARY, false);
-        wpCard.addView(settingsWpPathLabel, topSpace(4));
+        wpCard.addView(makeText("THEME & WALLPAPER", 11, accentColor(), true));
+        settingsThemeModeLabel = makeText(
+                "Mode: " + (darkGlassMode ? "Dark Black Glass" : "White Glass"),
+                14, primaryTextColor(), true);
+        settingsWpPathLabel = makeText("Wallpaper: Default", 12.5f, secondaryTextColor(), false);
+        wpCard.addView(settingsThemeModeLabel, topSpace(4));
+        wpCard.addView(settingsWpPathLabel, topSpace(2));
+
+        LinearLayout modeRow = new LinearLayout(this);
+        modeRow.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams mLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        mLp.topMargin = dp(10);
+
+        Button whiteBtn = new Button(this);
+        whiteBtn.setText("White Glass");
+        whiteBtn.setAllCaps(false);
+        whiteBtn.setTextColor(!darkGlassMode ? Color.WHITE : primaryTextColor());
+        whiteBtn.setBackground(!darkGlassMode ? accentPillDrawable(14) : glassDrawable(14, false));
+        whiteBtn.setOnClickListener(v -> {
+            darkGlassMode = false;
+            prefs.edit().putBoolean(KEY_DARK_GLASS, false).apply();
+            rebuildScreensWithCurrentTheme();
+        });
+        applyAndroid17Press(whiteBtn, false);
+        LinearLayout.LayoutParams wLp = new LinearLayout.LayoutParams(0, dp(38), 1f);
+        wLp.rightMargin = dp(8);
+        modeRow.addView(whiteBtn, wLp);
+
+        Button blackBtn = new Button(this);
+        blackBtn.setText("Black Glass");
+        blackBtn.setAllCaps(false);
+        blackBtn.setTextColor(darkGlassMode ? 0xFF07090D : primaryTextColor());
+        blackBtn.setBackground(darkGlassMode ? accentPillDrawable(14) : glassDrawable(14, false));
+        blackBtn.setOnClickListener(v -> {
+            darkGlassMode = true;
+            prefs.edit().putBoolean(KEY_DARK_GLASS, true).apply();
+            rebuildScreensWithCurrentTheme();
+        });
+        applyAndroid17Press(blackBtn, false);
+        modeRow.addView(blackBtn, new LinearLayout.LayoutParams(0, dp(38), 1f));
+        wpCard.addView(modeRow, mLp);
 
         LinearLayout wpBtnRow = new LinearLayout(this);
         wpBtnRow.setOrientation(LinearLayout.HORIZONTAL);
         LinearLayout.LayoutParams wpRowLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        wpRowLp.topMargin = dp(10);
+        wpRowLp.topMargin = dp(8);
 
         Button setWpBtn = new Button(this);
         setWpBtn.setText("Set Photo");
         setWpBtn.setAllCaps(false);
-        setWpBtn.setTextColor(Color.WHITE);
-        setWpBtn.setBackground(bluePillDrawable(15));
+        setWpBtn.setTextColor(primaryTextColor());
+        setWpBtn.setBackground(glassDrawable(14, true));
         setWpBtn.setOnClickListener(v -> pickWallpaperImage());
         applyAndroid17Press(setWpBtn, false);
-        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(0, dp(40), 1f);
+        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(0, dp(38), 1f);
         sLp.rightMargin = dp(8);
         wpBtnRow.addView(setWpBtn, sLp);
 
         Button clearWpBtn = new Button(this);
         clearWpBtn.setText("Clear BG");
         clearWpBtn.setAllCaps(false);
-        clearWpBtn.setTextColor(COLOR_TEXT_PRIMARY);
-        clearWpBtn.setBackground(whiteGlassDrawable(15, false));
+        clearWpBtn.setTextColor(primaryTextColor());
+        clearWpBtn.setBackground(glassDrawable(14, false));
         clearWpBtn.setOnClickListener(v -> clearWallpaperImage());
         applyAndroid17Press(clearWpBtn, false);
-        wpBtnRow.addView(clearWpBtn, new LinearLayout.LayoutParams(0, dp(40), 1f));
+        wpBtnRow.addView(clearWpBtn, new LinearLayout.LayoutParams(0, dp(38), 1f));
 
         wpCard.addView(wpBtnRow, wpRowLp);
         page.addView(wpCard, topSpace(16));
 
-        // Live Glass & Visibility Controls Card
+        // Customize Sliders Card
         LinearLayout glassCard = new LinearLayout(this);
         glassCard.setOrientation(LinearLayout.VERTICAL);
-        glassCard.setBackground(whiteGlassDrawable(cornerRadiusDp, false));
+        glassCard.setBackground(glassDrawable(cornerRadiusDp, false));
         glassCard.setPadding(dp(16), dp(14), dp(16), dp(14));
-        glassCard.addView(makeText("LIVE GLASS & VISIBILITY", 11, COLOR_ACCENT_BLUE, true));
+        glassCard.addView(makeText("CUSTOMIZE GLASS & FONT", 11, accentColor(), true));
 
-        glassCard.addView(addSliderRow("Glass Transparency", glassAlpha, 255, val -> {
+        glassCard.addView(addSliderRow("Transparency", glassAlpha, 255, val -> {
             glassAlpha = val;
             prefs.edit().putInt(KEY_GLASS_ALPHA, glassAlpha).apply();
         }), topSpace(10));
@@ -949,7 +937,7 @@ public class MainActivity extends Activity {
             prefs.edit().putInt(KEY_CORNER_RADIUS, cornerRadiusDp).apply();
         }), topSpace(8));
 
-        settingsFontLabel = makeText("Editor Font: " + defaultFontSize + "sp", 13, COLOR_TEXT_PRIMARY, true);
+        settingsFontLabel = makeText("Editor Font: " + defaultFontSize + "sp", 13, primaryTextColor(), true);
         glassCard.addView(settingsFontLabel, topSpace(12));
 
         LinearLayout fontRow = new LinearLayout(this);
@@ -961,8 +949,8 @@ public class MainActivity extends Activity {
         Button smBtn = new Button(this);
         smBtn.setText("A-");
         smBtn.setAllCaps(false);
-        smBtn.setTextColor(COLOR_TEXT_PRIMARY);
-        smBtn.setBackground(whiteGlassDrawable(12, false));
+        smBtn.setTextColor(primaryTextColor());
+        smBtn.setBackground(glassDrawable(12, false));
         smBtn.setOnClickListener(v -> changeFontSize(-2));
         applyAndroid17Press(smBtn, false);
         LinearLayout.LayoutParams smLp = new LinearLayout.LayoutParams(dp(54), dp(36));
@@ -972,8 +960,8 @@ public class MainActivity extends Activity {
         Button lgBtn = new Button(this);
         lgBtn.setText("A+");
         lgBtn.setAllCaps(false);
-        lgBtn.setTextColor(COLOR_TEXT_PRIMARY);
-        lgBtn.setBackground(whiteGlassDrawable(12, false));
+        lgBtn.setTextColor(primaryTextColor());
+        lgBtn.setBackground(glassDrawable(12, false));
         lgBtn.setOnClickListener(v -> changeFontSize(2));
         applyAndroid17Press(lgBtn, false);
         fontRow.addView(lgBtn, new LinearLayout.LayoutParams(dp(54), dp(36)));
@@ -981,15 +969,15 @@ public class MainActivity extends Activity {
 
         page.addView(glassCard, topSpace(14));
 
-        // Storage & Info Card
+        // Storage Card
         LinearLayout infoCard = new LinearLayout(this);
         infoCard.setOrientation(LinearLayout.VERTICAL);
-        infoCard.setBackground(whiteGlassDrawable(cornerRadiusDp, false));
+        infoCard.setBackground(glassDrawable(cornerRadiusDp, false));
         infoCard.setPadding(dp(16), dp(14), dp(16), dp(14));
-        infoCard.addView(makeText("STORAGE & APP INFO", 11, COLOR_ACCENT_BLUE, true));
-        infoCard.addView(makeText("Internal storage/Mirror Note", 14.5f, COLOR_TEXT_PRIMARY, true), topSpace(4));
-        settingsPermStatus = makeText("File access: Checking...", 12.5f, COLOR_TEXT_SECONDARY, false);
-        settingsTotalNotes = makeText("Total notes: 0", 12.5f, COLOR_TEXT_SECONDARY, false);
+        infoCard.addView(makeText("STORAGE", 11, accentColor(), true));
+        infoCard.addView(makeText("Internal storage/Mirror Note", 14.5f, primaryTextColor(), true), topSpace(4));
+        settingsPermStatus = makeText("File access: Checking...", 12.5f, secondaryTextColor(), false);
+        settingsTotalNotes = makeText("Total notes: 0", 12.5f, secondaryTextColor(), false);
         infoCard.addView(settingsPermStatus, topSpace(4));
         infoCard.addView(settingsTotalNotes, topSpace(2));
 
@@ -997,8 +985,8 @@ public class MainActivity extends Activity {
         permBtn.setText("Manage File Permission");
         permBtn.setAllCaps(false);
         permBtn.setTextSize(13);
-        permBtn.setTextColor(COLOR_TEXT_PRIMARY);
-        permBtn.setBackground(whiteGlassDrawable(14, true));
+        permBtn.setTextColor(primaryTextColor());
+        permBtn.setBackground(glassDrawable(14, true));
         permBtn.setOnClickListener(v -> requestManageAllFilesPermission());
         applyAndroid17Press(permBtn, false);
         LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(
@@ -1021,9 +1009,9 @@ public class MainActivity extends Activity {
 
         LinearLayout hdr = new LinearLayout(this);
         hdr.setOrientation(LinearLayout.HORIZONTAL);
-        TextView nameTv = makeText(title, 12.5f, COLOR_TEXT_PRIMARY, true);
+        TextView nameTv = makeText(title, 12.5f, primaryTextColor(), true);
         nameTv.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        TextView valTv = makeText(String.valueOf(initial), 12, COLOR_TEXT_SECONDARY, true);
+        TextView valTv = makeText(String.valueOf(initial), 12, secondaryTextColor(), true);
         hdr.addView(nameTv);
         hdr.addView(valTv);
         box.addView(hdr);
@@ -1059,7 +1047,8 @@ public class MainActivity extends Activity {
 
     private View hairline() {
         View v = new View(this);
-        v.setBackgroundColor(COLOR_DIVIDER);
+        int div = darkGlassMode ? 0x1FFFFFFF : 0x1A0F172A;
+        v.setBackgroundColor(div);
         v.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
         return v;
     }
@@ -1088,11 +1077,14 @@ public class MainActivity extends Activity {
         if (settingsFontLabel != null) {
             settingsFontLabel.setText("Editor Font: " + defaultFontSize + "sp");
         }
+        if (settingsThemeModeLabel != null) {
+            settingsThemeModeLabel.setText("Mode: " + (darkGlassMode ? "Dark Black Glass" : "White Glass"));
+        }
         if (settingsWpPathLabel != null) {
             String wp = prefs.getString(KEY_WP_PATH, "");
             settingsWpPathLabel.setText((wp != null && !wp.isEmpty() && new File(wp).exists())
-                    ? "Custom photo active"
-                    : "Default: White + Soft Blue Smoke");
+                    ? "Wallpaper: Custom photo active"
+                    : "Wallpaper: Default");
         }
     }
 
@@ -1100,6 +1092,9 @@ public class MainActivity extends Activity {
     private void showHomeScreen() {
         editorScreen.setVisibility(View.GONE);
         settingsScreen.setVisibility(View.GONE);
+        if (editorBottomBar != null) {
+            editorBottomBar.setTranslationY(0f);
+        }
         animateScreenIn(homeScreen);
         checkPermissionAndLoad(false);
     }
@@ -1436,7 +1431,6 @@ public class MainActivity extends Activity {
                 "Pin / Unpin Note",
                 "Favourite / Unfavourite",
                 "Copy Content",
-                "Set Wallpaper",
                 "Delete Note"
         };
         new AlertDialog.Builder(this)
@@ -1455,8 +1449,6 @@ public class MainActivity extends Activity {
                     } else if (which == 2) {
                         copyEditorContent();
                     } else if (which == 3) {
-                        pickWallpaperImage();
-                    } else if (which == 4) {
                         if (currentEditingFileName != null) {
                             confirmAndDeleteFile(new File(notesFolder, currentEditingFileName), true);
                         } else {
@@ -1477,7 +1469,6 @@ public class MainActivity extends Activity {
                 .setPositiveButton("Delete", (d, w) -> {
                     try {
                         lastDeletedName = target.getName();
-                        lastDeletedFile = target;
                         lastDeletedBytes = Files.readAllBytes(target.toPath());
                     } catch (Exception ignored) {
                         lastDeletedBytes = null;
@@ -1522,7 +1513,6 @@ public class MainActivity extends Activity {
                 .show();
     }
 
-    // ==================== CLEAN NOTES LIST ====================
     private void renderNotesList() {
         if (notesListContainer == null) return;
         notesListContainer.removeAllViews();
@@ -1542,9 +1532,9 @@ public class MainActivity extends Activity {
 
         if (filtered.isEmpty()) {
             String msg = !hasStorageAccess()
-                    ? "Tap + New Note or Settings to allow file access."
-                    : (query.isEmpty() ? "No notes yet. Tap + New Note to write." : "No matching notes.");
-            TextView empty = makeText(msg, 14, COLOR_TEXT_SECONDARY, false);
+                    ? "Tap + to allow file access."
+                    : (query.isEmpty() ? "No notes yet. Tap + to write." : "No matching notes.");
+            TextView empty = makeText(msg, 14, secondaryTextColor(), false);
             empty.setPadding(dp(2), dp(36), dp(2), dp(24));
             notesListContainer.addView(empty);
             return;
@@ -1559,7 +1549,7 @@ public class MainActivity extends Activity {
 
             if (item.pinned && !hasPinnedHeader) {
                 hasPinnedHeader = true;
-                TextView pHdr = makeText("PINNED", 11, COLOR_ACCENT_BLUE, true);
+                TextView pHdr = makeText("PINNED", 11, accentColor(), true);
                 LinearLayout.LayoutParams hLp = new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
                 hLp.topMargin = dp(4);
@@ -1567,7 +1557,7 @@ public class MainActivity extends Activity {
                 notesListContainer.addView(pHdr, hLp);
             } else if (!item.pinned && hasPinnedHeader && !hasAllHeader) {
                 hasAllHeader = true;
-                TextView aHdr = makeText("NOTES", 11, COLOR_TEXT_SECONDARY, true);
+                TextView aHdr = makeText("NOTES", 11, secondaryTextColor(), true);
                 LinearLayout.LayoutParams hLp = new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
                 hLp.topMargin = dp(14);
@@ -1581,7 +1571,7 @@ public class MainActivity extends Activity {
             row.setBackgroundColor(Color.TRANSPARENT);
 
             String prefix = (item.pinned ? "📌 " : "") + (item.favourite ? "★ " : "");
-            TextView tView = makeText(prefix + item.title, 16.5f, COLOR_TEXT_PRIMARY, true);
+            TextView tView = makeText(prefix + item.title, 16.5f, primaryTextColor(), true);
             tView.setSingleLine(true);
             row.addView(tView);
 
@@ -1591,14 +1581,14 @@ public class MainActivity extends Activity {
             }
             TextView pView = makeText(
                     cleanPreview.isEmpty() ? "No additional text" : cleanPreview,
-                    13, COLOR_TEXT_SECONDARY, false);
+                    13, secondaryTextColor(), false);
             pView.setSingleLine(true);
             LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             pLp.topMargin = dp(3);
             row.addView(pView, pLp);
 
-            TextView dView = makeText(sdf.format(new Date(item.lastModified)), 11, COLOR_TEXT_SECONDARY, false);
+            TextView dView = makeText(sdf.format(new Date(item.lastModified)), 11, secondaryTextColor(), false);
             LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             dLp.topMargin = dp(4);
@@ -1647,7 +1637,7 @@ public class MainActivity extends Activity {
     private void showRenameDialog(NoteEntry item) {
         final EditText input = new EditText(this);
         input.setText(item.title);
-        input.setTextColor(COLOR_TEXT_PRIMARY);
+        input.setTextColor(primaryTextColor());
         input.setSingleLine(true);
 
         new AlertDialog.Builder(this)
