@@ -28,6 +28,7 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.animation.OvershootInterpolator;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.EditText;
@@ -116,6 +117,11 @@ public class MainActivity extends Activity {
     private View clearSearchBtn;
     private LinearLayout notesListContainer;
 
+    // Sliding Pill Dock references
+    private FrameLayout dockContainer;
+    private View dockSlidingPill;
+    private final Button[] dockTabButtons = new Button[4];
+
     private EditText editorTitleInput;
     private EditText editorBodyInput;
     private TextView editorTimestampView;
@@ -134,7 +140,7 @@ public class MainActivity extends Activity {
     private int sortMode = SORT_EDITED;
     private int defaultFontSize = 17;
     private boolean darkGlassMode = false; // false = White Glass, true = Black Glass
-    private int glassAlpha = 140;          // 0..255 (0 = fully transparent)
+    private int glassAlpha = 140;          // 0..255
     private int borderAlpha = 60;          // 0..255
     private int wallpaperDim = 20;         // 0..85
     private int cornerRadiusDp = 22;       // 8..34
@@ -147,6 +153,7 @@ public class MainActivity extends Activity {
 
     private byte[] lastDeletedBytes = null;
     private String lastDeletedName = null;
+    private long lastBackPressMs = 0L;
 
     private final Handler autosaveHandler = new Handler(Looper.getMainLooper());
     private final Runnable autosaveRunnable = this::performAutosave;
@@ -183,6 +190,31 @@ public class MainActivity extends Activity {
         autosaveHandler.removeCallbacks(autosaveRunnable);
         if (editorScreen != null && editorScreen.getVisibility() == View.VISIBLE) {
             performAutosave();
+        }
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (editorScreen != null && editorScreen.getVisibility() == View.VISIBLE) {
+            performAutosave();
+            hideKeyboard(editorBodyInput);
+            showHomeScreen();
+            return;
+        }
+        if (settingsScreen != null && settingsScreen.getVisibility() == View.VISIBLE) {
+            showHomeScreen();
+            return;
+        }
+        if (searchInput != null && searchInput.getText().length() > 0) {
+            searchInput.setText("");
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastBackPressMs < 2000L) {
+            super.onBackPressed();
+        } else {
+            lastBackPressMs = now;
+            Toast.makeText(this, "Press back again to exit", Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -230,22 +262,26 @@ public class MainActivity extends Activity {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
-    private GradientDrawable uniformGlassDrawable(int radiusDp, boolean selected) {
+    private GradientDrawable uniformGlassDrawable(int radiusDp, boolean highlight) {
         GradientDrawable d = new GradientDrawable();
         int alpha = Math.max(0, Math.min(255, glassAlpha));
-        if (selected && alpha < 75) {
-            alpha = 75;
-        }
         int baseRgb = darkGlassMode ? 0x00141822 : 0x00FFFFFF;
         d.setColor((alpha << 24) | baseRgb);
         d.setCornerRadius(dp(radiusDp));
 
         int bAlpha = Math.max(0, Math.min(255, borderAlpha));
-        if (selected && bAlpha < 130) {
+        if (highlight && bAlpha < 130) {
             bAlpha = 130;
         }
         int bRgb = darkGlassMode ? 0x00FFFFFF : 0x000F172A;
-        d.setStroke(dp(selected ? 1.5f : 1f), (bAlpha << 24) | bRgb);
+        d.setStroke(dp(highlight ? 1.5f : 1f), (bAlpha << 24) | bRgb);
+        return d;
+    }
+
+    private GradientDrawable slidingWhitePillDrawable(int radiusDp) {
+        GradientDrawable d = new GradientDrawable();
+        d.setColor(0xFFFFFFFF);
+        d.setCornerRadius(dp(radiusDp));
         return d;
     }
 
@@ -270,7 +306,7 @@ public class MainActivity extends Activity {
                             .translationY(0f)
                             .alpha(1f)
                             .setDuration(250)
-                            .setInterpolator(new android.view.animation.OvershootInterpolator(1.2f))
+                            .setInterpolator(new OvershootInterpolator(1.2f))
                             .start();
                     break;
             }
@@ -463,16 +499,18 @@ public class MainActivity extends Activity {
         page.setPadding(dp(20), dp(28), dp(20), dp(24));
         scroll.addView(page);
 
-        // Top Bar: Flower Icon + Mirror Note + Settings in Top-Right Corner
+        // Header: Tap Flower (✿) to open Settings — no right-side Settings clutter
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
 
-        TextView flowerBadge = makeText("✿", 18, primaryTextColor(), true);
+        TextView flowerBadge = makeText("✿", 19, primaryTextColor(), true);
         flowerBadge.setGravity(Gravity.CENTER);
-        flowerBadge.setBackground(uniformGlassDrawable(12, false));
-        LinearLayout.LayoutParams logoLp = new LinearLayout.LayoutParams(dp(34), dp(34));
-        logoLp.rightMargin = dp(10);
+        flowerBadge.setBackground(uniformGlassDrawable(14, false));
+        flowerBadge.setOnClickListener(v -> showSettingsScreen());
+        applyAndroid17Press(flowerBadge, true);
+        LinearLayout.LayoutParams logoLp = new LinearLayout.LayoutParams(dp(38), dp(38));
+        logoLp.rightMargin = dp(12);
         topBar.addView(flowerBadge, logoLp);
 
         LinearLayout titleCol = new LinearLayout(this);
@@ -482,17 +520,6 @@ public class MainActivity extends Activity {
         titleCol.addView(homeTitleView);
         titleCol.addView(countSummaryView);
         topBar.addView(titleCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
-        Button settingsTopBtn = new Button(this);
-        settingsTopBtn.setText("Settings");
-        settingsTopBtn.setAllCaps(false);
-        settingsTopBtn.setTextSize(12.5f);
-        settingsTopBtn.setTextColor(primaryTextColor());
-        settingsTopBtn.setBackground(uniformGlassDrawable(16, false));
-        settingsTopBtn.setPadding(dp(14), dp(7), dp(14), dp(7));
-        settingsTopBtn.setOnClickListener(v -> showSettingsScreen());
-        applyAndroid17Press(settingsTopBtn, false);
-        topBar.addView(settingsTopBtn);
 
         page.addView(topBar);
 
@@ -546,48 +573,39 @@ public class MainActivity extends Activity {
 
         wrapper.addView(scroll);
 
-        // Bottom Toggle Bar: 4 Equal Buttons (Recent | Created | A–Z | +) with Uniform Styling
-        LinearLayout homeDock = new LinearLayout(this);
-        homeDock.setOrientation(LinearLayout.HORIZONTAL);
-        homeDock.setGravity(Gravity.CENTER_VERTICAL);
-        homeDock.setBackground(uniformGlassDrawable(24, false));
-        homeDock.setPadding(dp(8), dp(6), dp(8), dp(6));
+        // Smooth Sliding White Pill Bottom Dock (Recent | Created | A–Z | +)
+        dockContainer = new FrameLayout(this);
+        dockContainer.setBackground(uniformGlassDrawable(26, false));
+        dockContainer.setPadding(dp(6), dp(6), dp(6), dp(6));
 
-        String[] sortLabels = {"Recent", "Created", "A–Z"};
-        int[] sortModes = {SORT_EDITED, SORT_CREATED, SORT_ALPHA};
-        for (int i = 0; i < sortLabels.length; i++) {
-            final int mode = sortModes[i];
-            Button tabBtn = new Button(this);
-            tabBtn.setText(sortLabels[i]);
-            tabBtn.setAllCaps(false);
-            tabBtn.setTextSize(12.5f);
-            boolean active = (sortMode == mode);
-            tabBtn.setTextColor(active ? primaryTextColor() : secondaryTextColor());
-            tabBtn.setTypeface(Typeface.create(active ? "sans-serif-medium" : "sans-serif",
-                    active ? Typeface.BOLD : Typeface.NORMAL));
-            tabBtn.setBackground(uniformGlassDrawable(16, active));
-            tabBtn.setMinimumHeight(0);
-            tabBtn.setOnClickListener(v -> {
-                sortMode = mode;
-                prefs.edit().putInt(KEY_SORT_MODE, sortMode).apply();
-                showHomeScreen();
-            });
-            applyAndroid17Press(tabBtn, false);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(38), 1f);
-            lp.rightMargin = dp(6);
-            homeDock.addView(tabBtn, lp);
+        dockSlidingPill = new View(this);
+        dockSlidingPill.setBackground(slidingWhitePillDrawable(20));
+        dockContainer.addView(dockSlidingPill, new FrameLayout.LayoutParams(dp(72), dp(40)));
+
+        LinearLayout buttonsRow = new LinearLayout(this);
+        buttonsRow.setOrientation(LinearLayout.HORIZONTAL);
+        buttonsRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        String[] labels = {"Recent", "Created", "A–Z", "+"};
+        for (int i = 0; i < 4; i++) {
+            final int index = i;
+            Button btn = new Button(this);
+            btn.setText(labels[i]);
+            btn.setAllCaps(false);
+            btn.setTextSize(i == 3 ? 18f : 12.5f);
+            btn.setBackgroundColor(Color.TRANSPARENT);
+            btn.setMinimumHeight(0);
+            btn.setMinimumWidth(0);
+            btn.setPadding(0, 0, 0, 0);
+            btn.setOnClickListener(v -> handleDockClick(index));
+            dockTabButtons[i] = btn;
+            buttonsRow.addView(btn, new LinearLayout.LayoutParams(0, dp(40), 1f));
         }
 
-        Button newBtn = new Button(this);
-        newBtn.setText("+");
-        newBtn.setAllCaps(false);
-        newBtn.setTextSize(18);
-        newBtn.setTextColor(primaryTextColor());
-        newBtn.setBackground(uniformGlassDrawable(16, false));
-        newBtn.setMinimumHeight(0);
-        newBtn.setOnClickListener(v -> openEditorForNewNote());
-        applyAndroid17Press(newBtn, true);
-        homeDock.addView(newBtn, new LinearLayout.LayoutParams(0, dp(38), 1f));
+        dockContainer.addView(buttonsRow, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        dockContainer.post(() -> moveDockPillTo(sortMode, false));
 
         FrameLayout.LayoutParams hdLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -595,9 +613,54 @@ public class MainActivity extends Activity {
         hdLp.leftMargin = dp(18);
         hdLp.rightMargin = dp(18);
         hdLp.bottomMargin = dp(16);
-        wrapper.addView(homeDock, hdLp);
+        wrapper.addView(dockContainer, hdLp);
 
         return wrapper;
+    }
+
+    private void handleDockClick(int index) {
+        moveDockPillTo(index, true);
+        if (index == 3) {
+            dockContainer.postDelayed(() -> {
+                moveDockPillTo(sortMode, true);
+                openEditorForNewNote();
+            }, 130);
+        } else {
+            sortMode = index;
+            prefs.edit().putInt(KEY_SORT_MODE, sortMode).apply();
+            loadNotesFromDisk();
+            renderNotesList();
+        }
+    }
+
+    private void moveDockPillTo(int index, boolean animate) {
+        if (dockContainer == null || dockSlidingPill == null) return;
+        int innerWidth = dockContainer.getWidth() - dockContainer.getPaddingLeft() - dockContainer.getPaddingRight();
+        if (innerWidth <= 0) return;
+        int slotWidth = innerWidth / 4;
+        ViewGroup.LayoutParams lp = dockSlidingPill.getLayoutParams();
+        lp.width = slotWidth;
+        dockSlidingPill.setLayoutParams(lp);
+
+        float targetX = index * slotWidth;
+        for (int i = 0; i < 4; i++) {
+            Button b = dockTabButtons[i];
+            if (b == null) continue;
+            boolean isSelected = (i == index);
+            b.setTextColor(isSelected ? 0xFF090B10 : primaryTextColor());
+            b.setTypeface(Typeface.create(isSelected ? "sans-serif-medium" : "sans-serif",
+                    isSelected ? Typeface.BOLD : Typeface.NORMAL));
+        }
+
+        if (animate) {
+            dockSlidingPill.animate()
+                    .translationX(targetX)
+                    .setDuration(280)
+                    .setInterpolator(new OvershootInterpolator(0.95f))
+                    .start();
+        } else {
+            dockSlidingPill.setTranslationX(targetX);
+        }
     }
 
     // ==================== FULL-SCREEN EDITOR ====================
@@ -771,7 +834,7 @@ public class MainActivity extends Activity {
         shareBtn.setAllCaps(false);
         shareBtn.setTextSize(12.5f);
         shareBtn.setTextColor(primaryTextColor());
-        shareBtn.setBackground(uniformGlassDrawable(14, true));
+        shareBtn.setBackground(uniformGlassDrawable(14, false));
         shareBtn.setOnClickListener(v -> shareEditorContent());
         applyAndroid17Press(shareBtn, false);
         bottomBar.addView(shareBtn, new LinearLayout.LayoutParams(0, dp(38), 1f));
@@ -830,7 +893,6 @@ public class MainActivity extends Activity {
         top.addView(heading, hLp);
         page.addView(top);
 
-        // Theme & Wallpaper Card
         LinearLayout wpCard = new LinearLayout(this);
         wpCard.setOrientation(LinearLayout.VERTICAL);
         wpCard.setBackground(uniformGlassDrawable(cornerRadiusDp, false));
@@ -907,7 +969,6 @@ public class MainActivity extends Activity {
         wpCard.addView(wpBtnRow, wpRowLp);
         page.addView(wpCard, topSpace(16));
 
-        // Transparency, Visibility, Dim & Roundness Card
         LinearLayout glassCard = new LinearLayout(this);
         glassCard.setOrientation(LinearLayout.VERTICAL);
         glassCard.setBackground(uniformGlassDrawable(cornerRadiusDp, false));
@@ -970,7 +1031,6 @@ public class MainActivity extends Activity {
 
         page.addView(glassCard, topSpace(14));
 
-        // Storage Card
         LinearLayout infoCard = new LinearLayout(this);
         infoCard.setOrientation(LinearLayout.VERTICAL);
         infoCard.setBackground(uniformGlassDrawable(cornerRadiusDp, false));
@@ -1003,6 +1063,9 @@ public class MainActivity extends Activity {
     private void applyLiveSurfaceStyles() {
         if (searchInput != null && searchInput.getParent() instanceof View) {
             ((View) searchInput.getParent()).setBackground(uniformGlassDrawable(18, false));
+        }
+        if (dockContainer != null) {
+            dockContainer.setBackground(uniformGlassDrawable(26, false));
         }
         if (editorBottomBar != null) {
             editorBottomBar.setBackground(uniformGlassDrawable(24, false));
@@ -1107,6 +1170,9 @@ public class MainActivity extends Activity {
             editorBottomBar.setTranslationY(0f);
         }
         animateScreenIn(homeScreen);
+        if (dockContainer != null) {
+            dockContainer.post(() -> moveDockPillTo(sortMode, false));
+        }
         checkPermissionAndLoad(false);
     }
 
@@ -1543,7 +1609,7 @@ public class MainActivity extends Activity {
 
         if (filtered.isEmpty()) {
             String msg = !hasStorageAccess()
-                    ? "Tap + or Settings to allow file access."
+                    ? "Tap ✿ or + to allow file access."
                     : (query.isEmpty() ? "No notes yet. Tap + to write." : "No matching notes.");
             TextView empty = makeText(msg, 14, secondaryTextColor(), false);
             empty.setPadding(dp(2), dp(36), dp(2), dp(24));
